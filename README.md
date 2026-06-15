@@ -156,3 +156,7 @@ hullucinator/
 - `ebooklib` (EPUB export)
 - `fpdf` (PDF export)
 - DejaVu fonts (for PDF export, configurable via `PDF_FONT_DIR`)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
