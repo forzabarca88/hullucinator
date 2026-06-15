@@ -1,0 +1,34 @@
+# Generated book data (JSON files persisted per book)
+data/
+
+# Exported EPUB/PDF files
+exports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment config (API keys, endpoints)
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+

@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hullucinator — AI E-Book Generator</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #0f0f1a;
+  --bg-secondary: #1a1a2e;
+  --bg-card: #16213e;
+  --bg-input: #1a1a2e;
+  --accent: #e94560;
+  --accent-hover: #ff6b81;
+  --accent-glow: rgba(233, 69, 96, 0.3);
+  --text-primary: #eaeaea;
+  --text-secondary: #a0a0b8;
+  --text-muted: #6c6c80;
+  --success: #2ecc71;
+  --warning: #f39c12;
+  --info: #3498db;
+  --danger: #e74c3c;
+  --border: rgba(255,255,255,0.08);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+body {
+  font-family: var(--font);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--bg-card); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ── Layout ───────────────────────────────────────────────────────── */
+.app-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* ── Header / Hero ─────────────────────────────────────────────────── */
+.hero {
+  text-align: center;
+  padding: 3rem 0 2.5rem;
+  position: relative;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-logo {
+  font-size: 3rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), #ff6b81, #e94560);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-subtitle {
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  font-weight: 300;
+  margin-top: 0.5rem;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Create Book Form ─────────────────────────────────────────────── */
+.create-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  margin-bottom: 2.5rem;
+  box-shadow: var(--shadow);
+}
+
+.create-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.create-section h2 .icon {
+  font-size: 1.4rem;
+}
+
+.form-group {
+  margin-bottom: 1.2rem;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.form-group input,
+.form-group textarea {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 0.95rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.form-group textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.8rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), #ff6b81);
+  color: white;
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px var(--accent-glow);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card);
+  border-color: var(--accent);
+}
+
+.btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+.btn-epub {
+  background: linear-gradient(135deg, #3498db, #2980b9);
+  color: white;
+}
+
+.btn-pdf {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  color: white;
+}
+
+.btn-download {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  color: white;
+}
+
+.form-actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.form-row {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+
+.form-group select:focus,
+.form-row .form-group select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Custom select arrow */
+.form-group select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23a0a0b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.8rem center;
+  padding-right: 2rem;
+}
+
+/* ── Books List ───────────────────────────────────────────────────── */
+.books-section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.books-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.book-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
+.book-card:hover {
+  border-color: var(--accent);
+  transform: translateX(4px);
+  box-shadow: var(--shadow);
+}
+
+.book-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.book-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.book-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-pending { background: rgba(52,152,219,0.15); color: var(--info); }
+.status-summary_generated { background: rgba(52,152,219,0.15); color: var(--info); }
+.status-outline_generated { background: rgba(243,156,18,0.15); color: var(--warning); }
+.status-in_progress { background: rgba(243,156,18,0.15); color: var(--warning); }
+.status-completed { background: rgba(46,204,113,0.15); color: var(--success); }
+.status-failed { background: rgba(231,76,60,0.15); color: var(--danger); }
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-in_progress .status-dot {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.book-prompt {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.book-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+/* ── Tags ──────────────────────────────────────────────────────────── */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tag {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  background: rgba(233, 69, 96, 0.12);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* ── Length Badge ──────────────────────────────────────────────────── */
+.length-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  background: rgba(52, 152, 219, 0.12);
+  color: var(--info);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* ── Progress Bar ─────────────────────────────────────────────────── */
+.progress-bar-container {
+  margin-top: 0.6rem;
+  display: none;
+}
+
+.book-card[data-status="in_progress"] .progress-bar-container,
+.book-card[data-status="summary_generated"] .progress-bar-container,
+.book-card[data-status="outline_generated"] .progress-bar-container {
+  display: block;
+}
+
+.progress-bar-bg {
+  height: 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--info), var(--accent));
+  border-radius: 3px;
+  transition: width 0.5s ease;
+  width: 0%;
+}
+
+.progress-text {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.3rem;
+  font-family: var(--mono);
+}
+
+/* ── Book Detail Modal ────────────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.modal-overlay.active {
+  display: flex;
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 720px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  animation: modalIn 0.3s ease;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95) translateY(20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1.5rem 2rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  flex: 1;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.2rem;
+  line-height: 1;
+  transition: color 0.2s;
+}
+
+.modal-close:hover {
+  color: var(--accent);
+}
+
+.modal-body {
+  padding: 1.5rem 2rem;
+}
+
+.modal-section {
+  margin-bottom: 1.5rem;
+}
+
+.modal-section h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.modal-section p,
+.modal-section .content-text {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.modal-section .content-text {
+  white-space: pre-wrap;
+  font-family: var(--font);
+}
+
+.modal-section pre.ascii-cover {
+  background: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.8rem;
+  padding: 1rem 2rem 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Empty State ──────────────────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+}
+
+.empty-state .icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.empty-state p {
+  font-size: 1rem;
+}
+
+/* ── Toast Notifications ──────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.toast {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1.2rem;
+  font-size: 0.9rem;
+  box-shadow: var(--shadow);
+  animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--danger); }
+.toast.info { border-left: 3px solid var(--info); }
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(100%); }
+}
+
+/* ── Loading Spinner ──────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .app-container { padding: 1rem; }
+  .hero { padding: 2rem 0 1.5rem; }
+  .hero-logo { font-size: 2.2rem; }
+  .create-section { padding: 1.5rem; }
+  .modal { margin: 1rem; max-height: 90vh; }
+  .modal-header, .modal-body, .modal-actions { padding-left: 1.2rem; padding-right: 1.2rem; }
+  .modal-actions { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+
+<div class="app-container">
+  <!-- Hero -->
+  <header class="hero">
+    <h1 class="hero-logo">Hullucinator</h1>
+    <p class="hero-subtitle">AI-Powered E-Book Generator</p>
+  </header>
+
+  <!-- Create Book Form -->
+  <section class="create-section">
+    <h2><span class="icon">✍️</span> Create a New Book</h2>
+    <form id="createForm">
+      <div class="form-group">
+        <label for="title">Book Title</label>
+        <input type="text" id="title" placeholder="The Martian Garden" required>
+      </div>
+      <div class="form-group">
+        <label for="prompt">Prompt / Description</label>
+        <textarea id="prompt" placeholder="Describe your book idea — the plot, themes, setting, characters. The more detail you provide, the better the generated book will be." required></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="tags">Genre / Tags</label>
+          <input type="text" id="tags" placeholder="e.g. science fiction, time travel, comedy">
+          <small style="color:var(--text-muted);font-size:0.75rem;margin-top:0.2rem;display:block">Comma-separated tags help guide the story's tone and style</small>
+        </div>
+        <div class="form-group" style="flex:1">
+          <label for="length">Book Length</label>
+          <select id="length" style="width:100%;padding:0.8rem 1rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:var(--font);font-size:0.95rem;transition:border-color 0.2s,box-shadow 0.2s;appearance:none;cursor:pointer">
+            <option value="short_story">Short Story</option>
+            <option value="novella">Novella</option>
+            <option value="novel" selected>Novel</option>
+            <option value="epic">Epic / Saga</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="createBtn">
+          <span id="createBtnText">Generate Book</span>
+          <span id="createBtnSpinner" class="spinner" style="display:none;"></span>
+        </button>
+        <span id="createStatus" style="color: var(--text-muted); font-size: 0.85rem;"></span>
+      </div>
+    </form>
+  </section>
+
+  <!-- Books List -->
+  <section class="books-section">
+    <h2><span class="icon">📚</span> Your Library</h2>
+    <div id="booksList" class="books-list">
+      <div class="empty-state">
+        <div class="icon">📖</div>
+        <p>No books yet. Create your first one above!</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- Book Detail Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTitle">Book Title</h2>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-actions" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ── API Helper ───────────────────────────────────────────────────────
+const API = '/api';
+
+async function apiFetch(path, options = {}) {
+  const resp = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || resp.statusText);
+  }
+  return resp.json();
+}
+
+// ── Toast Notifications ──────────────────────────────────────────────
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  const icons = { success: '✅', error: '❌', info: 'ℹ️' };
+  toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> ${message}`;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3200);
+}
+
+// ── Status Badge ─────────────────────────────────────────────────────
+function statusBadge(status) {
+  const labels = {
+    pending: 'Queued',
+    summary_generated: 'Summary',
+    outline_generated: 'Outline',
+    in_progress: 'Writing...',
+    completed: 'Completed',
+    failed: 'Failed',
+  };
+  return `<span class="book-status status-${status}"><span class="status-dot"></span>${labels[status] || status}</span>`;
+}
+
+// ── Render Books List ────────────────────────────────────────────────
+function renderBooks(books) {
+  const list = document.getElementById('booksList');
+
+  if (!books || books.length === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">📖</div><p>No books yet. Create your first one above!</p></div>`;
+    return;
+  }
+
+  list.innerHTML = books.map(b => {
+    const pct = b.progress?.percentage ?? 0;
+    const step = b.progress?.current_step ?? b.status;
+    const chapters = b.progress?.chapters_completed ?? 0;
+    const total = b.progress?.total_chapters ?? 0;
+    const tags = (b.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('');
+    const lengthLabel = {short_story:'Short Story',novella:'Novella',novel:'Novel',epic:'Epic'}[b.length] || b.length;
+
+    return `
+      <div class="book-card" data-id="${b.id}" data-status="${b.status}" onclick="openBookDetail('${b.id}')">
+        <div class="book-card-header">
+          <span class="book-title">${escHtml(b.title)}</span>
+          ${statusBadge(b.status)}
+        </div>
+        <div class="book-prompt">${escHtml(b.prompt)}</div>
+        <div class="book-meta">
+          ${tags ? '<div class="tags">' + tags + '</div>' : ''}
+          <span class="length-badge">${escHtml(lengthLabel)}</span>
+          <span>${total > 0 ? chapters + '/' + total + ' chapters' : ''}</span>
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" style="width: ${pct}%"></div>
+          </div>
+          <div class="progress-text">${step}: ${pct}%</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── HTML Escaping ────────────────────────────────────────────────────
+function escHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Create Book ──────────────────────────────────────────────────────
+document.getElementById('createForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = document.getElementById('title').value.trim();
+  const prompt = document.getElementById('prompt').value.trim();
+  const tagsRaw = document.getElementById('tags').value.trim();
+  const length = document.getElementById('length').value;
+  if (!title || !prompt) return;
+
+  const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(t => t) : [];
+
+  const btn = document.getElementById('createBtn');
+  const btnText = document.getElementById('createBtnText');
+  const btnSpinner = document.getElementById('createBtnSpinner');
+  const statusEl = document.getElementById('createStatus');
+
+  btn.disabled = true;
+  btnText.textContent = 'Creating...';
+  btnSpinner.style.display = 'inline-block';
+  statusEl.textContent = '';
+
+  try {
+    const result = await apiFetch('/books/create', {
+      method: 'POST',
+      body: JSON.stringify({ title, prompt, tags, length }),
+    });
+
+    document.getElementById('title').value = '';
+    document.getElementById('prompt').value = '';
+    document.getElementById('tags').value = '';
+    statusEl.textContent = 'Book queued! Generating in background...';
+    statusEl.style.color = 'var(--success)';
+    showToast(`"${title}" queued for generation`, 'success');
+
+    // Refresh book list
+    await loadBooks();
+
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err.message;
+    statusEl.style.color = 'var(--danger)';
+    showToast('Failed to create book: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btnText.textContent = 'Generate Book';
+    btnSpinner.style.display = 'none';
+  }
+});
+
+// ── Load Books ───────────────────────────────────────────────────────
+async function loadBooks() {
+  try {
+    const books = await apiFetch('/books');
+    renderBooks(books);
+  } catch (err) {
+    console.error('Failed to load books:', err);
+  }
+}
+
+// ── Book Detail Modal ────────────────────────────────────────────────
+let currentBookId = null;
+let pollingInterval = null;
+
+async function openBookDetail(bookId) {
+  currentBookId = bookId;
+  await renderBookDetail(bookId);
+
+  const overlay = document.getElementById('modalOverlay');
+  overlay.classList.add('active');
+
+  // Start polling for in-progress books
+  startPolling(bookId);
+}
+
+async function renderBookDetail(bookId) {
+  try {
+    const book = await apiFetch('/books/' + bookId);
+
+    document.getElementById('modalTitle').textContent = book.title;
+
+    const body = document.getElementById('modalBody');
+    let html = '';
+
+    // Status
+    html += `<div class="modal-section">
+      <h3>Status</h3>
+      <p>${statusBadge(book.status)} ${book.progress?.current_step ? ' — ' + escHtml(book.progress.current_step) : ''}</p>
+    </div>`;
+
+    // Progress bar
+    if (book.status !== 'completed' && book.status !== 'failed') {
+      const pct = book.progress?.percentage ?? 0;
+      html += `<div class="modal-section">
+        <div class="progress-bar-bg" style="height:8px;">
+          <div class="progress-bar-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="progress-text">${book.progress?.chapters_completed ?? 0}/${book.progress?.total_chapters ?? 0} chapters — ${pct}%</div>
+      </div>`;
+    }
+
+    // Prompt
+    html += `<div class="modal-section">
+      <h3>Prompt</h3>
+      <p>${escHtml(book.prompt)}</p>
+    </div>`;
+
+    // Tags & Length
+    if (book.tags && book.tags.length > 0) {
+      const lengthLabel = {short_story:'Short Story',novella:'Novella',novel:'Novel',epic:'Epic / Saga'}[book.length] || book.length || 'Novel';
+      html += `<div class="modal-section">
+        <h3>Genre & Length</h3>
+        <div class="tags">${book.tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>
+        <span class="length-badge" style="margin-top:0.4rem;display:inline-block">${escHtml(lengthLabel)}</span>
+      </div>`;
+    }
+
+    // Summary
+    if (book.summary) {
+      html += `<div class="modal-section">
+        <h3>Summary</h3>
+        <p class="content-text">${escHtml(book.summary)}</p>
+      </div>`;
+    }
+
+    // ASCII Cover
+    if (book.ascii_cover) {
+      html += `<div class="modal-section">
+        <h3>ASCII Cover</h3>
+        <pre class="ascii-cover">${escHtml(book.ascii_cover)}</pre>
+      </div>`;
+    }
+
+    // Outline
+    if (book.outline && book.outline.length > 0) {
+      html += `<div class="modal-section">
+        <h3>Outline (${book.outline.length} chapters)</h3>
+        <ol style="padding-left:1.5rem;color:var(--text-primary);font-size:0.9rem;line-height:1.8;">
+          ${book.outline.map(ch => `<li>${escHtml(ch)}</li>`).join('')}
+        </ol>
+      </div>`;
+    }
+
+    // Chapters (show first chapter preview if in progress)
+    if (book.chapters && Object.keys(book.chapters).length > 0) {
+      const chapterKeys = Object.keys(book.chapters);
+      const previewKey = chapterKeys[0];
+      const previewContent = book.chapters[previewKey];
+      const preview = previewContent.substring(0, 600);
+      const truncated = previewContent.length > 600;
+
+      html += `<div class="modal-section">
+        <h3>Chapters (${chapterKeys.length} generated)</h3>`;
+
+      if (book.status === 'completed') {
+        // Show all chapters as collapsible sections
+        chapterKeys.forEach(key => {
+          const content = book.chapters[key];
+          html += `<details style="margin-bottom:0.8rem;">
+            <summary style="cursor:pointer;font-weight:600;color:var(--text-primary);margin-bottom:0.3rem;">
+              ${escHtml(key)}
+            </summary>
+            <p class="content-text" style="margin-top:0.3rem;">${escHtml(content)}</p>
+          </details>`;
+        });
+      } else {
+        // In progress: show preview of first chapter
+        html += `<p class="content-text">${escHtml(preview)}${truncated ? '...' : ''}</p>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin-top:0.5rem;">Writing in progress — full content will appear when complete</p>`;
+      }
+      html += `</div>`;
+    }
+
+    // Error info
+    if (book.metadata?.error) {
+      html += `<div class="modal-section">
+        <h3>Error</h3>
+        <p style="color:var(--danger);">${escHtml(book.metadata.error)}</p>
+      </div>`;
+    }
+
+    body.innerHTML = html;
+
+    // Actions
+    const actions = document.getElementById('modalActions');
+    let actionsHtml = '';
+
+    if (book.status === 'completed') {
+      actionsHtml += `<a href="${API}/books/${bookId}/export/epub" class="btn btn-epub btn-sm">📥 Download EPUB</a>`;
+      actionsHtml += `<a href="${API}/books/${bookId}/export/pdf" class="btn btn-pdf btn-sm">📥 Download PDF</a>`;
+    }
+
+    if (book.status === 'failed') {
+      actionsHtml += `<button class="btn btn-secondary btn-sm" onclick="retryBook('${bookId}')">🔄 Retry</button>`;
+    }
+
+    actions.innerHTML = actionsHtml;
+
+  } catch (err) {
+    document.getElementById('modalBody').innerHTML = `<p style="color:var(--danger);">Failed to load book details: ${escHtml(err.message)}</p>`;
+  }
+}
+
+// ── Close Modal ──────────────────────────────────────────────────────
+document.getElementById('modalClose').addEventListener('click', closeModal);
+document.getElementById('modalOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+  stopPolling();
+  currentBookId = null;
+}
+
+// ── Polling ──────────────────────────────────────────────────────────
+function startPolling(bookId) {
+  stopPolling();
+  pollingInterval = setInterval(async () => {
+    if (currentBookId !== bookId) return;
+    try {
+      const book = await apiFetch('/books/' + bookId);
+
+      // Update the card in the list
+      const card = document.querySelector(`.book-card[data-id="${bookId}"]`);
+      if (card) {
+        card.dataset.status = book.status;
+        const pct = book.progress?.percentage ?? 0;
+        const step = book.progress?.current_step ?? book.status;
+        const chapters = book.progress?.chapters_completed ?? 0;
+        const total = book.progress?.total_chapters ?? 0;
+
+        const badge = card.querySelector('.book-status');
+        if (badge) {
+          badge.className = `book-status status-${book.status}`;
+          const labels = {pending:'Queued',summary_generated:'Summary',outline_generated:'Outline',in_progress:'Writing...',completed:'Completed',failed:'Failed'};
+          badge.innerHTML = `<span class="status-dot"></span>${labels[book.status] || book.status}`;
+        }
+        const dot = card.querySelector('.status-dot');
+        if (dot) dot.className = 'status-dot';
+        const progressFill = card.querySelector('.progress-bar-fill');
+        if (progressFill) progressFill.style.width = pct + '%';
+        const progressText = card.querySelector('.progress-text');
+        if (progressText) progressText.textContent = `${step}: ${pct}%`;
+        const metaSpan = card.querySelector('.book-meta span:last-child');
+        if (metaSpan) metaSpan.textContent = total > 0 ? `${chapters}/${total} chapters` : '';
+      }
+
+      // If modal is open for this book, update it
+      if (currentBookId === bookId && document.getElementById('modalOverlay').classList.contains('active')) {
+        await renderBookDetail(bookId);
+      }
+
+      // Stop polling if completed or failed
+      if (book.status === 'completed' || book.status === 'failed') {
+        stopPolling();
+        if (book.status === 'completed') {
+          showToast(`"${book.title}" is ready!`, 'success');
+        } else {
+          showToast(`"${book.title}" generation failed`, 'error');
+        }
+        // Refresh the full list
+        await loadBooks();
+      }
+    } catch (err) {
+      console.error('Polling error:', err);
+    }
+  }, 3000); // Poll every 3 seconds
+}
+
+function stopPolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+// ── Retry Book ───────────────────────────────────────────────────────
+async function retryBook(bookId) {
+  try {
+    const book = await apiFetch('/books/' + bookId);
+    // Re-create with same title, prompt, tags, and length
+    const result = await apiFetch('/books/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: book.title,
+        prompt: book.prompt,
+        tags: book.tags || [],
+        length: book.length || 'novel',
+      }),
+    });
+    closeModal();
+    showToast(`"${book.title}" re-queued for generation`, 'info');
+    await loadBooks();
+  } catch (err) {
+    showToast('Retry failed: ' + err.message, 'error');
+  }
+}
+
+// ── Keyboard Shortcuts ───────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// ── Initial Load ─────────────────────────────────────────────────────
+loadBooks();
+
+// Auto-refresh the book list every 10 seconds
+setInterval(loadBooks, 10000);
+</script>
+</body>
+</html>
