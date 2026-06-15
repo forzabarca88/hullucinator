@@ -116,50 +116,6 @@ class Orchestrator:
         save_book(book_state.id, book_state)
         return summary
 
-    async def generate_ascii_cover(self, book_state: BookState):
-        """Generate ASCII art book cover."""
-        if book_state.status != "summary_generated":
-            raise ValueError(
-                f"Cannot generate cover: book is in '{book_state.status}' status (expected 'summary_generated')"
-            )
-        if not book_state.summary:
-            raise ValueError("Cannot generate cover: summary is missing")
-
-        system_prompt = (
-            "You are a creative assistant that generates ASCII art book covers. "
-            "Create a visually appealing ASCII art cover that reflects the book's theme."
-        )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": (
-                f"Generate a beautiful ASCII art book cover for the following book:\n\n"
-                f"Title: {book_state.title}\n"
-                f"Genre/Tags: {', '.join(book_state.tags) if book_state.tags else 'general'}\n"
-                f"Summary:\n{book_state.summary}\n\n"
-                f"Return ONLY the ASCII art inside a markdown code block. "
-                f"Do not include any other text or explanations."
-            )},
-        ]
-
-        response = await self.ai_client.generate_completion(messages)
-        ascii_art = response["choices"][0]["message"]["content"]
-
-        # Clean up markdown code blocks
-        if "```" in ascii_art:
-            parts = ascii_art.split("```")
-            if len(parts) >= 2:
-                ascii_art = parts[1]
-            # Strip language label like "text" or "ascii"
-            if ascii_art and ascii_art[0].isalpha():
-                newline = ascii_art.find("\n")
-                if newline > 0:
-                    ascii_art = ascii_art[newline + 1:]
-            ascii_art = ascii_art.strip()
-
-        book_state.ascii_cover = ascii_art
-        save_book(book_state.id, book_state)
-        return ascii_art
-
     def _parse_outline(self, outline_content: str) -> List[str]:
         """
         Parse chapter titles from LLM output. Tries JSON first, then falls back

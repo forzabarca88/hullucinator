@@ -224,44 +224,11 @@ li {
     text-indent: 0;
 }
 
-pre {
-    font-family: "Courier New", Courier, monospace;
-    font-size: 0.65em;
-    white-space: pre;
-    overflow-x: auto;
-    background-color: #f8f8f8;
-    padding: 1em;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    text-align: center;
-    line-height: 1.15;
-    text-indent: 0;
-    color: #555;
-}
-
 .cover-page h1 {
     font-size: 2.5em;
     margin-top: 20vh;
     letter-spacing: 0.15em;
     text-transform: uppercase;
-}
-
-.cover-page h2 {
-    font-size: 1.3em;
-    color: #666;
-    font-style: italic;
-    letter-spacing: 0.1em;
-    margin-top: 0.5em;
-}
-
-.cover-page pre {
-    font-size: 0.5em;
-    text-align: center;
-    margin-top: 8vh;
-    background: none;
-    border: none;
-    color: #555;
-    line-height: 1.1;
 }
 
 .chapter-body p:first-of-type::first-letter {
@@ -282,7 +249,6 @@ def export_to_epub(
     book_id: str,
     title: str,
     chapters: dict,
-    ascii_cover: str = None,
     tags: list[str] = None,
     output_dir: str = None,
 ):
@@ -316,17 +282,6 @@ def export_to_epub(
     cover_page = epub.EpubHtml(title='Cover', file_name='cover.xhtml', lang='en')
     cover_html = '<div class="cover-page">'
     cover_html += f'<h1>{html_lib.escape(title)}</h1>'
-    if ascii_cover:
-        # Extract subtitle from ASCII art (spaced uppercase letters)
-        subtitle = ""
-        for line in ascii_cover.split('\n'):
-            cleaned = re.sub(r'[╔╗║╝╚═]', '', line).strip()
-            if cleaned and re.match(r'^[A-Z][A-Za-z\s]+$', cleaned) and len(cleaned) < 40:
-                subtitle = cleaned
-                break
-        if subtitle:
-            cover_html += f'<h2>{html_lib.escape(subtitle)}</h2>'
-        cover_html += f'<pre>{html_lib.escape(ascii_cover)}</pre>'
     cover_html += '</div>'
     cover_page.content = cover_html
     book.add_item(cover_page)
@@ -365,7 +320,6 @@ def export_to_pdf(
     book_id: str,
     title: str,
     chapters: dict,
-    ascii_cover: str = None,
     tags: list[str] = None,
     output_dir: str = None,
 ):
@@ -389,16 +343,6 @@ def export_to_pdf(
         pdf.add_font("DejaVu", "B", "", uni=False)
         pdf.add_font("DejaVuMono", "", "", uni=False)
         pdf.add_font("DejaVuMono", "B", "", uni=False)
-
-    # Cover page
-    if ascii_cover:
-        pdf.set_font("DejaVu", "B", 14)
-        pdf.cell(200, 10, txt="Book Cover", ln=True, align='C')
-        pdf.ln(5)
-        pdf.set_font("DejaVuMono", "", 8)
-        for line in ascii_cover.split('\n'):
-            pdf.cell(200, 5, txt=line, ln=True)
-        pdf.add_page()
 
     # Title page
     pdf.set_font("DejaVu", "B", 18)

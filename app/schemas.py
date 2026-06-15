@@ -20,7 +20,6 @@ class BookState(BaseModel):
     outline: Optional[List[str]] = None
     chapters: Optional[Dict[str, str]] = None
     metadata: Optional[Dict[str, Any]] = None
-    ascii_cover: Optional[str] = None
 
     # Progress tracking for the web interface
     progress: Dict[str, Any] = Field(default_factory=lambda: {

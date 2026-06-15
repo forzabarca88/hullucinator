@@ -70,7 +70,6 @@ async def _run_generation_pipeline(book_id: str):
 
     try:
         await orchestrator.generate_summary(book_state)
-        await orchestrator.generate_ascii_cover(book_state)
         await orchestrator.generate_outline(book_state)
         await orchestrator.generate_chapters(book_state)
         logger.info("Book '%s' (%s) generation completed", book_state.title, book_id)
@@ -317,14 +316,14 @@ async def export_book(book_id: str, fmt: str):
 
     try:
         if fmt == "epub":
-            path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.ascii_cover, book_state.tags)
+            path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags)
             return FileResponse(
                 path,
                 media_type="application/epub+zip",
                 filename=f"{book_state.title}.epub",
             )
         elif fmt == "pdf":
-            path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.ascii_cover, book_state.tags)
+            path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags)
             return FileResponse(
                 path,
                 media_type="application/pdf",

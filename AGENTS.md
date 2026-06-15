@@ -13,7 +13,7 @@ After every change, review and if required update the `README.md` and `AGENTS.md
 Hullucinator is a **FastAPI service with a web interface** that orchestrates LLM calls to generate complete e-books from a user prompt. The pipeline is linear and runs as a background task:
 
 ```
-POST /api/books/create → (background) generate_summary → generate_ascii_cover → generate_outline → generate_chapters
+POST /api/books/create → (background) generate_summary → generate_outline → generate_chapters
 ```
 
 ### Components
@@ -21,10 +21,10 @@ POST /api/books/create → (background) generate_summary → generate_ascii_cove
 | Module | Responsibility | Key Details |
 |--------|---------------|-------------|
 | `app/main.py` | FastAPI app & HTTP endpoints | Defines all API + web UI endpoints. Creates `AIClient` and `Orchestrator` as module-level singletons. Configured via environment variables. Background task support via `asyncio.create_task()`. Serves static web UI. |
-| `app/schemas.py` | Data models | `BookState` Pydantic model: `id`, `title`, `prompt`, `tags` (List[str]), `length` (str), `status`, `summary`, `outline`, `chapters`, `metadata`, `ascii_cover`, `progress` (Dict). `BookCreateRequest` for API input with same fields. |
+| `app/schemas.py` | Data models | `BookState` Pydantic model: `id`, `title`, `prompt`, `tags` (List[str]), `length` (str), `status`, `summary`, `outline`, `chapters`, `metadata`, `progress` (Dict). `BookCreateRequest` for API input with same fields. |
 | `app/storage.py` | Persistence | JSON files in `data/books/`. Uses **absolute path** from project root. `list_books()` returns all books sorted by modification time. `EXPORTS_DIR` shared with exporter. |
 | `app/ai_client.py` | LLM API client | Talks to OpenAI-compatible `/v1/chat/completions`. Retries 2x on 429/500/503 or empty responses. Uses **persistent** `httpx.AsyncClient`. Uses **async** `await asyncio.sleep()`. |
-| `app/orchestrator.py` | Pipeline coordinator | 4 async methods + `validate_book`. Each step saves state to disk. **Enforced status transitions** prevent data inconsistencies. Progress tracking updated at each step. Improved outline parser. **Tags and length** guide LLM prompts throughout the pipeline (chapter count, word count, genre tone). |
+| `app/orchestrator.py` | Pipeline coordinator | 3 async methods + `validate_book`. Each step saves state to disk. **Enforced status transitions** prevent data inconsistencies. Progress tracking updated at each step. Improved outline parser. **Tags and length** guide LLM prompts throughout the pipeline (chapter count, word count, genre tone). |
 | `app/exporter.py` | EPUB/PDF export | EPUB: full CSS styling, markdown→HTML conversion, TOC, drop caps, **genre tags as EPUB subjects**. PDF: plain text with configurable font paths (env var `PDF_FONT_DIR`), fallback to Helvetica, **tags on title page**. Uses absolute `EXPORTS_DIR` from storage. |
 | `static/index.html` | Web interface | Polished dark-themed SPA with book creation form (title, prompt, **tags**, **length** selector), library view with tag/length badges, progress polling, detail modal, EPUB/PDF downloads. |
 
@@ -86,7 +86,6 @@ The API is open. For production, add authentication (API keys, OAuth, etc.).
 - **Storage format:** One JSON file per book in `data/books/`, named `{id}.json`
 - **Export format:** EPUB and PDF files written to `exports/` directory, named `{book_id}.{ext}`
 - **Chapter storage:** Dict mapping chapter title (string) → chapter content (string)
-- **ASCII cover:** Stored as a raw string (may contain box-drawing characters and unicode)
 - **Progress tracking:** `progress` dict with `current_step`, `total_chapters`, `chapters_completed`, `percentage`
 - **API prefix:** All API endpoints use `/api/` prefix; web UI served at `/`
 - **Logging:** Structured logging via Python `logging` module; configurable via `LOG_LEVEL`
@@ -98,7 +97,7 @@ The API is open. For production, add authentication (API keys, OAuth, etc.).
 When extending the system, follow these patterns:
 
 - **New generation steps:** Add a method to `Orchestrator`, add to `VALID_TRANSITIONS`, call it from `_run_generation_pipeline`, and persist state via `save_book`.
-- **New export formats:** Add a function in `exporter.py` following the existing pattern (takes `book_id`, `title`, `chapters`, `ascii_cover`, `tags`, `output_dir`). Use absolute `EXPORTS_DIR` from `storage`.
+- **New export formats:** Add a function in `exporter.py` following the existing pattern (takes `book_id`, `title`, `chapters`, `tags`, `output_dir`). Use absolute `EXPORTS_DIR` from `storage`.
 - **New endpoints:** Define in `main.py` under `/api/` prefix. Use `load_book()` for lookup + `validate_book()` before processing.
 - **Web UI changes:** Edit `static/index.html`. The JS uses `apiFetch()` helper for all API calls.
 - **Tags/length in prompts:** When adding new orchestrator methods, always inject `book_state.tags` and `book_state.length` into the LLM prompts so the generation stays consistent with user intent.

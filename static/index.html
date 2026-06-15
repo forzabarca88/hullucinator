@@ -517,18 +517,6 @@ body {
   font-family: var(--font);
 }
 
-.modal-section pre.ascii-cover {
-  background: var(--bg-secondary);
-  padding: 1rem;
-  border-radius: var(--radius-sm);
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  line-height: 1.2;
-  color: var(--text-secondary);
-  overflow-x: auto;
-  white-space: pre;
-}
-
 .modal-actions {
   display: flex;
   gap: 0.8rem;
@@ -898,14 +886,6 @@ async function renderBookDetail(bookId) {
       html += `<div class="modal-section">
         <h3>Summary</h3>
         <p class="content-text">${escHtml(book.summary)}</p>
-      </div>`;
-    }
-
-    // ASCII Cover
-    if (book.ascii_cover) {
-      html += `<div class="modal-section">
-        <h3>ASCII Cover</h3>
-        <pre class="ascii-cover">${escHtml(book.ascii_cover)}</pre>
       </div>`;
     }
 

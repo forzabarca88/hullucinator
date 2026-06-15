@@ -1,6 +1,6 @@
 # Hullucinator — AI-Powered E-Book Generator
 
-A FastAPI service with a polished web interface that generates complete e-books from a simple prompt. Provide a title, a topic, genre tags, and desired book length — the system orchestrates an LLM to produce a summary, ASCII art cover, chapter outline, full chapter content, and exports to EPUB or PDF.
+A FastAPI service with a polished web interface that generates complete e-books from a simple prompt. Provide a title, a topic, genre tags, and desired book length — the system orchestrates an LLM to produce a summary, chapter outline, full chapter content, and exports to EPUB or PDF.
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ The built-in web interface provides:
 - **Book length** — Choose Short Story, Novella, Novel, or Epic / Saga to control chapter count and word count
 - **Live progress** — Real-time progress bar showing generation status
 - **Book library** — Browse all your generated books with status indicators, tags, and length badges
-- **Book details** — View summary, outline, ASCII cover, and chapter content
+- **Book details** — View summary, outline, and chapter content
 - **Downloads** — Export completed books as EPUB (with genre metadata) or PDF
 - **Auto-polling** — Progress updates automatically without page refresh
 
@@ -102,9 +102,8 @@ curl -o mybook.pdf http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75
 The orchestrator runs these steps sequentially, incorporating genre tags and length throughout:
 
 1. **Summary** — LLM generates a detailed book summary from the prompt, guided by genre tags and length
-2. **ASCII Cover** — LLM creates an ASCII art book cover themed to the genre
-3. **Outline** — LLM produces chapter titles from the summary, with chapter count determined by book length
-4. **Chapters** — Each chapter is generated one at a time, using the summary, tags, and target word count for context
+2. **Outline** — LLM produces chapter titles from the summary, with chapter count determined by book length
+3. **Chapters** — Each chapter is generated one at a time, using the summary, tags, and target word count for context
 
 Status transitions: `pending` → `summary_generated` → `outline_generated` → `in_progress` → `completed` (or `failed` at any step)
 
