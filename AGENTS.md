@@ -20,13 +20,13 @@ POST /api/books/create → (background) generate_summary → generate_outline �
 
 | Module | Responsibility | Key Details |
 |--------|---------------|-------------|
-| `app/main.py` | FastAPI app & HTTP endpoints | Defines all API + web UI endpoints. Creates `AIClient` and `Orchestrator` as module-level singletons. Configured via environment variables. Background task support via `asyncio.create_task()`. Serves static web UI. **New: AI config endpoints** (`GET/POST /api/config`, `GET /api/models`). **New: review trigger** (`POST /api/books/{id}/review`). |
-| `app/schemas.py` | Data models | `BookState` Pydantic model: `id`, `title`, `prompt`, `tags` (List[str]), `length` (str), `status`, `summary`, `outline`, `chapters`, `chapter_summaries` (Dict[str,str]), `metadata`, `review` (Dict), `progress` (Dict). `BookCreateRequest` for API input. |
-| `app/storage.py` | Persistence | JSON files in `data/books/`. Uses **absolute path** from project root. `list_books()` returns all books sorted by modification time. `EXPORTS_DIR` shared with exporter. |
-| `app/ai_client.py` | LLM API client | Talks to OpenAI-compatible `/v1/chat/completions`. Retries 2x on 429/500/503 or empty responses. Uses **persistent** `httpx.AsyncClient`. Uses **async** `await asyncio.sleep()`. **New: runtime-reconfigurable** endpoint, model, and API key via properties. **New: `list_models()`** fetches available models from `/v1/models`. |
-| `app/orchestrator.py` | Pipeline coordinator | 4 async methods + `validate_book`. Each step saves state to disk. **Enforced status transitions** prevent data inconsistencies. Progress tracking updated at each step. Improved outline parser. **Tags and length** guide LLM prompts throughout the pipeline. **New: chapter continuity** — each chapter receives cumulative context via condensed chapter summaries. **New: post-completion review** — professional critic reviews the book, identifies issues, and corrects them. Full audit trail in `book_state.review`. |
+| `app/main.py` | FastAPI app & HTTP endpoints | Defines all API + web UI endpoints. Creates `AIClient`, optional `ReviewerClient`, and `Orchestrator` as module-level singletons. Configured via environment variables. **Config persistence** — loads from `data/config.json` on startup, saves on changes (no API keys). Background task support via `asyncio.create_task()`. Serves static web UI. AI config endpoints (`GET/POST /api/config`, `GET /api/models`). Review trigger (`POST /api/books/{id}/review`). Writer + reviewer config in one endpoint. |
+| `app/schemas.py` | Data models | `BookState` Pydantic model: `id`, `title`, `prompt`, `tags` (List[str]), `length` (str), `status`, `summary`, `outline`, `chapters`, `chapter_summaries` (Dict[str,str]), `metadata`, `review` (Dict — latest turn result), `review_history` (List[Dict] — full audit trail), `review_max_turns` (int, default 2), `progress` (Dict). `BookCreateRequest` for API input includes `review_max_turns`. `AIConfig` for persisted config: `endpoint_url`, `model_name`, `reviewer_endpoint_url`, `reviewer_model_name`, `review_max_turns`. |
+| `app/storage.py` | Persistence | JSON files in `data/books/`. Uses **absolute path** from project root. `list_books()` returns all books sorted by modification time. `EXPORTS_DIR` shared with exporter. **Config persistence** — `save_config()` and `load_config()` read/write `data/config.json` (endpoint URLs, model names, review settings). API keys are **never persisted** for security. |
+| `app/ai_client.py` | LLM API client | Talks to OpenAI-compatible `/v1/chat/completions`. Retries 2x on 429/500/503 or empty responses. Uses **persistent** `httpx.AsyncClient`. Uses **async** `await asyncio.sleep()`. Runtime-reconfigurable endpoint, model, and API key via properties. `list_models()` fetches available models from `/v1/models`. **`ReviewerClient`** — dedicated client for review/correction tasks, can use different endpoint/model than main `AIClient` while sharing the same HTTP connection and auth headers. |
+| `app/orchestrator.py` | Pipeline coordinator | 5 async methods (`generate_summary`, `generate_outline`, `generate_chapters`, `review_book`, `validate_book`). Each step saves state to disk. **Enforced status transitions** prevent data inconsistencies. Progress tracking updated at each step. Improved outline parser. **Tags and length** guide LLM prompts throughout the pipeline. **Chapter continuity** — each chapter receives cumulative context via condensed chapter summaries. **Iterative review loop** — `review_book()` runs critique → correct → re-critique until approved or `review_max_turns` reached. Uses separate `reviewer_client` if configured. Full audit trail in `book_state.review_history`. Fuzzy chapter title matching for issue-to-chapter mapping. |
 | `app/exporter.py` | EPUB/PDF export | EPUB: full CSS styling, markdown→HTML conversion, TOC, drop caps, **genre tags as EPUB subjects**. PDF: plain text with configurable font paths (env var `PDF_FONT_DIR`), fallback to Helvetica, **tags on title page**. Uses absolute `EXPORTS_DIR` from storage. **New: review metadata** included in exports (score, verdict, corrections on title page). |
-| `static/index.html` | Web interface | Polished dark-themed SPA with book creation form (title, prompt, **tags**, **length** selector), library view with tag/length badges, progress polling, detail modal, EPUB/PDF downloads. **New: Settings panel** for runtime AI configuration (endpoint URL, API key, model selector with live model list). **New: review section** in detail modal showing critique, score, verdict, and correction audit trail. |
+| `static/index.html` | Web interface | Polished dark-themed SPA with book creation form (title, prompt, **tags**, **length** selector, **max review turns** selector), library view with tag/length badges, progress polling, detail modal, EPUB/PDF downloads. **Settings panel** for runtime AI configuration (writer endpoint URL, API key, model selector with live model list, **reviewer endpoint URL**, **reviewer model**, **global max review turns**). **Review section** in detail modal showing per-turn score, verdict, critique, correction audit trail, and full review history iteration summary. |
 
 ## Configuration
 
@@ -34,13 +34,17 @@ All configuration is via environment variables (see `.env.example`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | LLM API endpoint |
-| `AI_MODEL_NAME` | `qwen3.6-27b` | Model name |
+| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | Writer LLM API endpoint |
+| `AI_MODEL_NAME` | `qwen3.6-27b` | Writer model name |
 | `AI_API_KEY` | *(empty)* | Bearer token |
+| `REVIEWER_ENDPOINT_URL` | *(empty)* | Reviewer LLM endpoint (empty = use writer's) |
+| `REVIEWER_MODEL_NAME` | *(empty)* | Reviewer model (empty = use writer's) |
 | `HULLUCINATOR_HOST` | `0.0.0.0` | Bind address |
 | `HULLUCINATOR_PORT` | `8000` | Port |
 | `PDF_FONT_DIR` | `/usr/share/fonts/truetype/dejavu` | PDF font directory |
 | `LOG_LEVEL` | `INFO` | Logging level |
+
+**Config Persistence:** AI settings (endpoint URLs, model names, max review turns) are persisted to `data/config.json` and loaded on server startup. This survives restarts. **API keys are never persisted** — they must come from environment variables or runtime updates via the GUI/API.
 
 **Runtime Configuration:** AI settings can be changed at runtime via the GUI Settings panel or the `/api/config` endpoint. Changes take effect immediately for all subsequent generation tasks.
 
@@ -61,6 +65,9 @@ The following issues from the original codebase have been fixed:
 11. ✅ **No Chapter Continuity** — Each chapter now receives cumulative context via condensed summaries of prior chapters
 12. ✅ **No Quality Review** — Post-completion professional critic review with automatic corrections
 13. ✅ **No Model Discovery** — GUI fetches available models from the LLM provider
+14. ✅ **No Config Persistence** — AI settings saved to `data/config.json` on changes, loaded on startup. API keys never persisted.
+15. ✅ **No Separate Reviewer Config** — Optional `REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME` env vars + GUI settings. ReviewerClient shares HTTP connection but uses different endpoint/model.
+16. ✅ **No Iterative Review Loop** — `review_book()` runs critique → correct → re-critique until approved or `review_max_turns` reached. Full per-turn audit trail in `review_history`.
 
 ## Remaining Technical Debt
 
@@ -102,7 +109,9 @@ The review step sends the entire book to the LLM, which can be expensive for lon
 - **Logging:** Structured logging via Python `logging` module; configurable via `LOG_LEVEL`
 - **Tags:** List of genre/theme strings (e.g. `comedy`, `dark fantasy`, `biography`). Guided by user input, injected into all LLM prompts. Stored in `BookState.tags`. Default: empty list.
 - **Book length:** One of `short_story`, `novella`, `novel`, `epic`. Controls chapter count (`LENGTH_CHAPTER_COUNT`) and word count (`LENGTH_WORD_COUNT`) in orchestrator prompts. Default: `novel` (8–15 chapters, 20,000–50,000 words).
-- **Review audit:** `BookState.review` dict with `critique` (raw LLM response), `issues` (list of identified problems), `overall_score` (0-10), `verdict` (`needs_revision` | `ready`), `corrections` (list of applied fixes), `reviewed` (bool).
+- **Review audit:** `BookState.review` dict (latest turn result) with `turn` (int), `critique` (raw LLM response), `issues` (list of identified problems), `overall_score` (0-10), `verdict` (`needs_revision` | `ready`), `corrections` (list of applied fixes), `reviewed` (bool). `BookState.review_history` — list of all turn dicts providing full iteration audit trail. `BookState.review_max_turns` — maximum critique→correct iterations (default 2, settable per-book).
+- **Reviewer config:** Optional separate endpoint/model for review tasks. Configured via `REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME` env vars, GUI settings panel, or `POST /api/config`. Empty values mean reviewer uses the same endpoint/model as the writer.
+- **Config persistence:** `data/config.json` stores `endpoint_url`, `model_name`, `reviewer_endpoint_url`, `reviewer_model_name`, `review_max_turns`. Loaded on startup, saved on config changes. API keys are **never persisted**.
 
 ## Chapter Continuity Design
 
@@ -116,13 +125,14 @@ This approach provides narrative continuity without consuming excessive tokens f
 
 ## Review Design
 
-The review process runs automatically after chapter generation:
+The review process runs automatically after chapter generation (or can be triggered manually via `POST /api/books/{id}/review`):
 
-1. **Critique:** Full book (summary + outline + all chapters) sent to LLM acting as professional critic
-2. **Issue Detection:** Critic identifies plot holes, character inconsistencies, pacing issues, continuity errors, tone inconsistencies, and unresolved threads
-3. **Correction Loop:** For each issue, the affected chapter is re-revisioned with context from the rest of the book
-4. **Audit Trail:** Full critique text, issues list, and corrections are stored in `book_state.review`
-5. **Export:** Review metadata (score, verdict, corrections count) included in EPUB/PDF title pages
+1. **Critique:** Full book (summary + outline + all chapters) sent to the reviewer LLM acting as professional critic. Uses `reviewer_client` if configured (different endpoint/model), otherwise falls back to main `ai_client`.
+2. **Issue Detection:** Critic identifies plot holes, character inconsistencies, pacing issues, continuity errors, tone inconsistencies, and unresolved threads. Returns JSON with `issues`, `overall_score` (0-10), and `verdict` (`needs_revision` | `ready`).
+3. **Iterative Correction Loop:** For each issue, the affected chapter is re-revisioned with full context from the rest of the book (summary + outline + prior chapter summaries). After all corrections in a turn, the reviewer re-evaluates. This repeats until the book passes review (score ≥ 7, verdict = `ready`) or `review_max_turns` is reached.
+4. **Audit Trail:** Each turn's critique, issues, score, verdict, and corrections are appended to `book_state.review_history`. The latest turn is also kept in `book_state.review` for backward compatibility.
+5. **Max Turns:** Default 2 turns. Configurable per-book (`BookCreateRequest.review_max_turns`) or globally (GUI settings, `POST /api/config`). If max turns is reached without passing, the book is marked as `reviewed` with a `max_turns_reached` flag.
+6. **Export:** Review metadata (score, verdict, corrections count) included in EPUB/PDF title pages.
 
 ## Adding Features
 
@@ -133,4 +143,5 @@ When extending the system, follow these patterns:
 - **New endpoints:** Define in `main.py` under `/api/` prefix. Use `load_book()` for lookup + `validate_book()` before processing.
 - **Web UI changes:** Edit `static/index.html`. The JS uses `apiFetch()` helper for all API calls.
 - **Tags/length in prompts:** When adding new orchestrator methods, always inject `book_state.tags` and `book_state.length` into the LLM prompts so the generation stays consistent with user intent.
-- **AI config changes:** Use `ai_client.update_config()` for runtime updates. The `AIClient` uses mutable properties for endpoint, model, and API key.
+- **AI config changes:** Use `ai_client.update_config()` for runtime updates. The `AIClient` uses mutable properties for endpoint, model, and API key. `ReviewerClient` has its own `update_config()` for reviewer-specific settings. Config is persisted via `save_config()` in storage.
+- **Reviewer config:** Reviewer settings (endpoint, model) are optional. Empty values mean the reviewer uses the same endpoint/model as the writer. Configure via `REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME` env vars, GUI settings panel, or `POST /api/config`.

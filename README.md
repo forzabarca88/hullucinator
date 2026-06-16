@@ -6,9 +6,12 @@ A FastAPI service with a polished web interface that generates complete e-books 
 
 - **Smart book generation** — LLM produces summary, chapter outline, and full chapters
 - **Chapter continuity** — Each chapter receives context from all prior chapters for cohesive writing
-- **Professional review** — Automatic post-completion review catches plot holes, inconsistencies, and pacing issues
-- **Auto-correction** — Identified issues are corrected with full audit trail
-- **Configurable AI provider** — Change endpoint URL, API key, and model from the GUI at runtime
+- **Professional review** — Iterative critique → correct → re-critique loop catches plot holes, inconsistencies, and pacing issues
+- **Separate reviewer** — Optional different LLM endpoint/model for unbiased review
+- **Configurable max review turns** — Control review depth per-book or globally (default: 2 turns)
+- **Auto-correction** — Identified issues are corrected with full per-turn audit trail
+- **Configurable AI provider** — Change endpoint URL, API key, model, and reviewer settings from the GUI at runtime
+- **Config persistence** — AI settings saved to disk and restored on restart (API keys excluded for security)
 - **Model discovery** — Fetch available models from your LLM provider
 - **Rich exports** — EPUB with CSS styling, TOC, drop caps, and review metadata; PDF with configurable fonts
 - **Live progress tracking** — Real-time progress bar with chapter-by-chapter updates
@@ -44,7 +47,7 @@ The built-in web interface provides:
 - **Professional review** — See critique score, verdict, and corrections applied
 - **Downloads** — Export completed books as EPUB (with genre metadata and review info) or PDF
 - **Auto-polling** — Progress updates automatically without page refresh
-- **Settings panel** — Configure AI endpoint URL, API key, and model from the GUI (top-right ⚙️ button)
+- **Settings panel** — Configure AI endpoint URL, API key, model, reviewer endpoint, reviewer model, and max review turns from the GUI (top-right ⚙️ button)
 
 ## API Endpoints
 
@@ -52,8 +55,8 @@ The built-in web interface provides:
 |--------|----------|-------------|
 | `GET` | `/` | Web interface (HTML) |
 | `GET` | `/api/health` | Health check |
-| `GET` | `/api/config` | Get current AI configuration |
-| `POST` | `/api/config` | Update AI configuration at runtime |
+| `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
+| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model, max review turns). Persisted to `data/config.json` (no API keys). |
 | `GET` | `/api/models` | List available models from LLM provider |
 | `POST` | `/api/books/create` | Create a new book (background generation) |
 | `GET` | `/api/books` | List all books |
@@ -66,9 +69,11 @@ The built-in web interface provides:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | LLM API endpoint |
-| `AI_MODEL_NAME` | `qwen3.6-27b` | Model to use |
+| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | Writer LLM API endpoint |
+| `AI_MODEL_NAME` | `qwen3.6-27b` | Writer model name |
 | `AI_API_KEY` | *(empty)* | API key (Bearer auth) |
+| `REVIEWER_ENDPOINT_URL` | *(empty)* | Reviewer LLM endpoint (empty = use writer's) |
+| `REVIEWER_MODEL_NAME` | *(empty)* | Reviewer model (empty = use writer's) |
 | `HULLUCINATOR_HOST` | `0.0.0.0` | Server bind address |
 | `HULLUCINATOR_PORT` | `8000` | Server port |
 | `PDF_FONT_DIR` | `/usr/share/fonts/truetype/dejavu` | PDF font directory |
@@ -79,10 +84,15 @@ The built-in web interface provides:
 AI settings can be changed at runtime without restarting the server:
 
 ```bash
-# Update endpoint and model
+# Update writer endpoint and model
 curl -X POST http://localhost:8000/api/config \
   -H "Content-Type: application/json" \
   -d '{"endpoint_url": "http://my-server:8080", "model_name": "llama3-70b"}'
+
+# Configure separate reviewer
+curl -X POST http://localhost:8000/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"reviewer_endpoint_url": "http://reviewer-server:9000", "reviewer_model_name": "critic-model", "review_max_turns": 3}'
 
 # Update API key only
 curl -X POST http://localhost:8000/api/config \
@@ -93,12 +103,14 @@ curl -X POST http://localhost:8000/api/config \
 curl http://localhost:8000/api/models
 ```
 
+**Note:** Config changes are persisted to `data/config.json` automatically. API keys are never saved for security.
+
 ### Create a Book (API)
 
 ```bash
 curl -X POST http://localhost:8000/api/books/create \
   -H "Content-Type: application/json" \
-  -d '{"title": "The Martian Garden", "prompt": "A short story about a botanist who grows a garden on Mars.", "tags": ["science fiction", "comedy"], "length": "short_story"}'
+  -d '{"title": "The Martian Garden", "prompt": "A short story about a botanist who grows a garden on Mars.", "tags": ["science fiction", "comedy"], "length": "short_story", "review_max_turns": 2}'
 ```
 
 **Book length options:**
@@ -112,9 +124,11 @@ curl -X POST http://localhost:8000/api/books/create \
 
 **Tags** (optional) guide the LLM on genre, tone, and themes. Examples: `comedy`, `dark fantasy`, `biography`, `space opera`.
 
+**Max review turns** (optional, default: 2) controls how many critique→correct iterations the reviewer will perform. Set per-book or globally via the Settings panel.
+
 Response (returns immediately, generation runs in background):
 ```json
-{"book_id": "567a1645-7fb7-4b85-a7f4-0be75b849c99", "status": "pending"}
+{"book_id": "567a1645-7fb7-4b85-a7f4-0be75b849c99", "status": "pending", "review_max_turns": 2}
 ```
 
 ### Check Progress
@@ -149,24 +163,31 @@ The orchestrator runs these steps sequentially, incorporating genre tags and len
    - Book summary (overall direction)
    - Full outline (structural awareness)
    - Condensed summaries of all previously generated chapters (narrative continuity)
-4. **Review** — Professional critic reviews the complete book:
-   - Identifies plot holes, character inconsistencies, pacing issues, and continuity errors
-   - Auto-corrects chapters with issues
-   - Full audit trail stored for transparency
+4. **Review** — Professional critic reviews the complete book using an **iterative correction loop**:
+   - Critic evaluates the full book and identifies issues (plot holes, inconsistencies, pacing, continuity)
+   - Affected chapters are re-revisioned with full context
+   - Critic re-evaluates the corrected book
+   - Loop continues until the book passes review (score ≥ 7) or max turns is reached
+   - Full per-turn audit trail stored in `review_history`
+   - Uses a separate reviewer LLM if configured (`REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME`)
 
 Status transitions: `pending` → `summary_generated` → `outline_generated` → `in_progress` → `completed` → `reviewing` → `reviewed` (or `failed` at any step)
 
-Generation runs as a **background task** — the API returns immediately and you can poll `/api/books/{book_id}` for progress. The review step runs automatically after chapter generation completes.
+Generation runs as a **background task** — the API returns immediately and you can poll `/api/books/{book_id}` for progress. The review step runs automatically after chapter generation completes, or can be triggered manually via `POST /api/books/{book_id}/review`.
 
 ## Configuration
 
 Create a `.env` file from `.env.example`:
 
 ```bash
-# AI Provider
+# AI Provider (Writer)
 AI_ENDPOINT_URL=http://your-llm-server:8080
 AI_MODEL_NAME=your-model-name
 AI_API_KEY=your-api-key
+
+# Reviewer (optional — leave empty to use writer's endpoint/model)
+REVIEWER_ENDPOINT_URL=
+REVIEWER_MODEL_NAME=
 
 # Server
 HULLUCINATOR_HOST=0.0.0.0
@@ -184,13 +205,14 @@ hullucinator/
 │   ├── main.py          # FastAPI app, endpoints, background tasks, web UI
 │   ├── schemas.py       # Pydantic data models (BookState, BookCreateRequest)
 │   ├── storage.py       # JSON file persistence (absolute paths)
-│   ├── ai_client.py     # HTTP client for LLM API (async, persistent, reconfigurable)
-│   ├── orchestrator.py  # Generation pipeline with continuity + review
+│   ├── ai_client.py     # HTTP client for LLM API (async, persistent, reconfigurable). Includes ReviewerClient for separate review endpoint/model.
+│   ├── orchestrator.py  # Generation pipeline with chapter continuity + iterative review loop
 │   └── exporter.py      # EPUB & PDF export (configurable fonts, review metadata)
 ├── static/
 │   └── index.html       # Polished web interface with settings panel
 ├── data/
-│   └── books/           # Generated books stored as JSON files
+│   ├── books/           # Generated books stored as JSON files
+│   └── config.json      # Persisted AI config (endpoint URLs, model names, max turns — no API keys)
 ├── exports/             # Exported EPUB/PDF files
 ├── .env.example         # Environment variable template
 ├── pyproject.toml       # Python project metadata & dependencies

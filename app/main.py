@@ -3,11 +3,12 @@ Hullucinator — AI-Powered E-Book Generator
 
 FastAPI application with:
 - Environment-variable configuration (AI endpoint, model, API key)
-- Runtime-reconfigurable AI settings via API
+- Runtime-reconfigurable AI settings via API (persisted to data/config.json)
 - Model listing from the LLM provider
+- Separate reviewer endpoint/model for review tasks
+- Iterative review-correction loop with configurable max turns
 - Background task support for non-blocking book generation
 - Progress polling endpoint for the web interface
-- Post-completion book review with correction loop
 - Static file serving for the polished web UI
 - All REST API endpoints (create, list, get, validate, export, review)
 """
@@ -23,10 +24,10 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.schemas import BookState, BookCreateRequest
-from app.ai_client import AIClient
+from app.schemas import BookState, BookCreateRequest, AIConfig
+from app.ai_client import AIClient, ReviewerClient
 from app.orchestrator import Orchestrator
-from app.storage import save_book, load_book, list_books
+from app.storage import save_book, load_book, list_books, save_config, load_config
 from app.exporter import export_to_epub, export_to_pdf
 
 logging.basicConfig(
@@ -43,8 +44,23 @@ AI_API_KEY = os.environ.get("AI_API_KEY", "")
 HOST = os.environ.get("HULLUCINATOR_HOST", "0.0.0.0")
 PORT = int(os.environ.get("HULLUCINATOR_PORT", "8000"))
 
+# Reviewer defaults (empty = use same as writer)
+REVIEWER_ENDPOINT_URL = os.environ.get("REVIEWER_ENDPOINT_URL", "")
+REVIEWER_MODEL_NAME = os.environ.get("REVIEWER_MODEL_NAME", "")
+
 logger.info("AI Endpoint: %s", AI_ENDPOINT_URL)
 logger.info("AI Model: %s", AI_MODEL_NAME)
+
+# ── Load persisted config (overrides env vars where set) ────────────────
+
+_persisted = load_config()
+if _persisted:
+    if _persisted.endpoint_url:
+        AI_ENDPOINT_URL = _persisted.endpoint_url
+    if _persisted.model_name:
+        AI_MODEL_NAME = _persisted.model_name
+    logger.info("Loaded persisted config (endpoint=%s, model=%s)",
+                _persisted.endpoint_url, _persisted.model_name)
 
 # ── Singleton instances ─────────────────────────────────────────────────
 
@@ -53,7 +69,19 @@ ai_client = AIClient(
     model_name=AI_MODEL_NAME,
     api_key=AI_API_KEY if AI_API_KEY else None,
 )
-orchestrator = Orchestrator(ai_client)
+
+# Reviewer client: uses different endpoint/model if configured
+reviewer_client: ReviewerClient | None = None
+if REVIEWER_ENDPOINT_URL or REVIEWER_MODEL_NAME:
+    reviewer_client = ReviewerClient(
+        ai_client,
+        endpoint_url=REVIEWER_ENDPOINT_URL or None,
+        model_name=REVIEWER_MODEL_NAME or None,
+    )
+    logger.info("Reviewer Endpoint: %s, Model: %s",
+                reviewer_client.endpoint_url, reviewer_client.model_name)
+
+orchestrator = Orchestrator(ai_client, reviewer_client=reviewer_client)
 
 # ── Background task registry ────────────────────────────────────────────
 
@@ -65,7 +93,7 @@ async def _run_generation_pipeline(book_id: str):
     """
     Run the full book generation pipeline as a background task.
     Updates book state on disk at each step for progress polling.
-    After chapters are complete, runs the review step automatically.
+    After chapters are complete, runs the iterative review step automatically.
     """
     book_state = load_book(book_id)
     if not book_state:
@@ -76,8 +104,8 @@ async def _run_generation_pipeline(book_id: str):
         await orchestrator.generate_summary(book_state)
         await orchestrator.generate_outline(book_state)
         await orchestrator.generate_chapters(book_state)
-        # Auto-trigger review after chapters are complete
-        await orchestrator.review_book(book_state)
+        # Auto-trigger iterative review after chapters are complete
+        await orchestrator.review_book(book_state, max_turns=book_state.review_max_turns)
         logger.info("Book '%s' (%s) generation + review completed", book_state.title, book_id)
 
     except Exception as e:
@@ -95,14 +123,29 @@ async def _run_generation_pipeline(book_id: str):
 # ── Request/Response schemas ────────────────────────────────────────────
 
 class AIConfigUpdate(BaseModel):
+    """Schema for updating AI configuration."""
     endpoint_url: str | None = None
     model_name: str | None = None
     api_key: str | None = None
+    # Reviewer settings (optional — empty/None means use same as writer)
+    reviewer_endpoint_url: str | None = None
+    reviewer_model_name: str | None = None
+    review_max_turns: int | None = None
 
 
 class ModelInfo(BaseModel):
     id: str
     name: str
+
+
+class AIConfigResponse(BaseModel):
+    """Schema for the GET /api/config response."""
+    endpoint_url: str
+    model_name: str
+    api_key_set: bool
+    reviewer_endpoint_url: str
+    reviewer_model_name: str
+    review_max_turns: int
 
 
 # ── Lifespan ────────────────────────────────────────────────────────────
@@ -122,7 +165,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Hullucinator",
     description="AI-Powered E-Book Generator — generate complete e-books from a simple prompt",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -252,19 +295,66 @@ async def health_check():
 
 @app.get("/api/config")
 async def get_ai_config():
-    """Get current AI configuration."""
-    return ai_client.get_config()
+    """Get current AI configuration (including reviewer settings)."""
+    reviewer_ep = ""
+    reviewer_model = ""
+    if reviewer_client:
+        rconf = reviewer_client.get_config()
+        reviewer_ep = rconf.get("endpoint_url", "")
+        reviewer_model = rconf.get("model_name", "")
+
+    return AIConfigResponse(
+        endpoint_url=ai_client.endpoint_url,
+        model_name=ai_client.model_name,
+        api_key_set=ai_client.api_key is not None and ai_client.api_key != "",
+        reviewer_endpoint_url=reviewer_ep,
+        reviewer_model_name=reviewer_model,
+        review_max_turns=2,  # global default
+    )
 
 
 @app.post("/api/config")
 async def update_ai_config(config: AIConfigUpdate):
-    """Update AI configuration at runtime."""
+    """
+    Update AI configuration at runtime. Changes take effect immediately
+    for all subsequent tasks. Persisted to data/config.json (no API keys).
+    """
+    # Update writer client
     await ai_client.update_config(
         endpoint_url=config.endpoint_url,
         model_name=config.model_name,
         api_key=config.api_key,
     )
-    return {"status": "ok", "config": ai_client.get_config()}
+
+    # Update reviewer client
+    if config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None:
+        if reviewer_client is None:
+            # Create one if it doesn't exist yet
+            endpoint = config.reviewer_endpoint_url or ai_client.endpoint_url
+            model = config.reviewer_model_name or ai_client.model_name
+            if endpoint or model:
+                reviewer_client = ReviewerClient(ai_client, endpoint_url=endpoint, model_name=model)
+                orchestrator.reviewer_client = reviewer_client
+                logger.info("Created reviewer client: endpoint=%s, model=%s", endpoint, model)
+        else:
+            await reviewer_client.update_config(
+                endpoint_url=config.reviewer_endpoint_url,
+                model_name=config.reviewer_model_name,
+            )
+
+    # Persist config (without API key)
+    persisted = AIConfig(
+        endpoint_url=config.endpoint_url or ai_client.endpoint_url,
+        model_name=config.model_name or ai_client.model_name,
+        reviewer_endpoint_url=config.reviewer_endpoint_url or (reviewer_client.endpoint_url if reviewer_client else ""),
+        reviewer_model_name=config.reviewer_model_name or (reviewer_client.model_name if reviewer_client else ""),
+        review_max_turns=config.review_max_turns if config.review_max_turns is not None else 2,
+    )
+    save_config(persisted)
+    logger.info("Config saved to disk: endpoint=%s, model=%s",
+                persisted.endpoint_url, persisted.model_name)
+
+    return {"status": "ok", "config": get_ai_config()}
 
 
 @app.get("/api/models")
@@ -291,6 +381,7 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
         tags=request.tags,
         length=request.length,
         status="pending",
+        review_max_turns=request.review_max_turns,
         progress={"current_step": "pending", "total_chapters": 0, "chapters_completed": 0, "percentage": 0},
     )
 
@@ -302,8 +393,9 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
     task = asyncio.create_task(_run_generation_pipeline(book_id))
     _active_tasks[book_id] = task
 
-    logger.info("Book '%s' (%s) queued for generation", request.title, book_id)
-    return {"book_id": book_id, "status": "pending"}
+    logger.info("Book '%s' (%s) queued for generation (max_review_turns=%d)",
+                request.title, book_id, request.review_max_turns)
+    return {"book_id": book_id, "status": "pending", "review_max_turns": request.review_max_turns}
 
 
 @app.get("/api/books")
@@ -320,6 +412,9 @@ async def list_all_books():
             "prompt": b.prompt,
             "tags": b.tags,
             "length": b.length,
+            "review_max_turns": b.review_max_turns,
+            "review": b.review,
+            "review_history": b.review_history,
         }
         for b in books
     ]
@@ -346,7 +441,8 @@ async def validate_book(book_id: str):
 @app.post("/api/books/{book_id}/review")
 async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
     """
-    Trigger a professional review of a completed book.
+    Trigger an iterative professional review of a completed book.
+    Runs critique → correct → re-critique until approved or max turns reached.
 
     The review runs in the background. Poll the book status to track progress.
     """
@@ -366,8 +462,8 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
             book = load_book(book_id)
             if not book:
                 return
-            await orchestrator.review_book(book)
-            logger.info("Review completed for '%s' (%s)", book.title, book_id)
+            await orchestrator.review_book(book, max_turns=book.review_max_turns)
+            logger.info("Iterative review completed for '%s' (%s)", book.title, book_id)
         except Exception as e:
             logger.error("Review failed for book %s: %s", book_id, e)
             book = load_book(book_id)
@@ -382,7 +478,7 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
     task = asyncio.create_task(_run_review())
     _active_tasks[book_id] = task
 
-    return {"status": "review_started", "book_id": book_id}
+    return {"status": "review_started", "book_id": book_id, "max_turns": book_state.review_max_turns}
 
 
 @app.get("/api/books/{book_id}/export/{fmt}")
@@ -443,7 +539,7 @@ def main():
         "--port", type=int, default=PORT, help="Port (default: %(default)s)"
     )
     parser.add_argument(
-        "--version", action="version", version="%(prog)s 1.1.0"
+        "--version", action="version", version="%(prog)s 1.2.0"
     )
 
     args = parser.parse_args()

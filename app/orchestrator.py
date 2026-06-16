@@ -7,15 +7,17 @@ to disk. Status transitions are enforced to prevent data inconsistencies.
 Key features:
 - Chapter continuity: each chapter receives cumulative context from prior chapters
 - Post-completion review: professional critic reviews the finished book
-- Correction loop: major issues identified by the critic are corrected
-- Full audit trail: review results stored in book metadata
+- Iterative correction loop: critic reviews → corrections → re-review until approved
+  or max turns reached
+- Separate reviewer client: optional different endpoint/model for review tasks
+- Full audit trail: per-turn review results stored in book metadata
 """
 import logging
 import re
 import json
 from typing import List, Optional
 
-from app.ai_client import AIClient
+from app.ai_client import AIClient, ReviewerClient
 from app.storage import save_book
 from app.schemas import BookState
 
@@ -66,8 +68,15 @@ def _transition(book_state: BookState, new_status: str):
 
 
 class Orchestrator:
-    def __init__(self, ai_client: AIClient):
+    def __init__(self, ai_client: AIClient, reviewer_client: Optional[ReviewerClient] = None):
         self.ai_client = ai_client
+        # Reviewer client for critique tasks (may use different endpoint/model)
+        # If None, falls back to the main ai_client
+        self.reviewer_client = reviewer_client
+
+    def _get_reviewer(self) -> AIClient | ReviewerClient:
+        """Return the client to use for review tasks."""
+        return self.reviewer_client if self.reviewer_client else self.ai_client
 
     def validate_book(self, book_state: BookState) -> dict:
         """
@@ -361,13 +370,15 @@ class Orchestrator:
 
         return book_state.chapters
 
-    async def review_book(self, book_state: BookState):
+    async def review_book(self, book_state: BookState, max_turns: Optional[int] = None):
         """
-        Review the completed book as a professional critic.
-        Identifies major issues (plot holes, pacing, consistency, etc.)
-        and corrects them if found.
+        Review the completed book as a professional critic, running an
+        iterative critique → correct → re-critique loop until the book
+        passes review or max_turns is reached.
 
-        The full review is stored in book_state.review for audit purposes.
+        Args:
+            book_state: The book to review
+            max_turns: Maximum review-correction iterations (defaults to book_state.review_max_turns)
         """
         if book_state.status not in ("completed", "reviewing"):
             raise ValueError(
@@ -384,139 +395,184 @@ class Orchestrator:
             save_book(book_state.id, book_state)
 
         tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+        reviewer = self._get_reviewer()
+        turns_limit = max_turns if max_turns is not None else book_state.review_max_turns
 
-        # Build the full book text for review (summary + outline + all chapters)
-        review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-        review_text += f"Summary:\n{book_state.summary}\n\n"
-        review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
+        # Initialize review history
+        if book_state.review_history is None:
+            book_state.review_history = []
 
-        for idx, (title, content) in enumerate(book_state.chapters.items(), 1):
-            review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content}"
+        logger.info("Starting iterative review for '%s' (max %d turns)...", book_state.title, turns_limit)
 
-        # Step 1: Professional critique
-        logger.info("Running professional book review for '%s'...", book_state.title)
-        critique_messages = [
-            {"role": "system", "content": (
-                "You are a professional book critic and editor with decades of experience. "
-                "Review the following book critically. Identify any major issues including:\n"
-                "- Plot holes or logical inconsistencies\n"
-                "- Character inconsistencies (voice, motivation, development)\n"
-                "- Pacing problems (rushed sections, dragging sections)\n"
-                "- Continuity errors (events that contradict earlier chapters)\n"
-                "- Tone or style inconsistencies across chapters\n"
-                "- Unresolved plot threads or unsatisfying endings\n\n"
-                "Return your review as a JSON object with this exact structure:\n"
-                '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
-                "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
-                "If the book is solid, set verdict to 'ready' with an empty issues array."
-            )},
-            {"role": "user", "content": review_text},
-        ]
+        for turn_num in range(1, turns_limit + 1):
+            logger.info("Review turn %d/%d for '%s'", turn_num, turns_limit, book_state.title)
 
-        critique_response = await self.ai_client.generate_completion(critique_messages, temperature=0.3)
-        critique_raw = critique_response["choices"][0]["message"]["content"].strip()
-
-        # Parse critique response
-        critique_data = self._parse_critique(critique_raw)
-        issues = critique_data.get("issues", [])
-        overall_score = critique_data.get("overall_score", 5)
-        verdict = critique_data.get("verdict", "needs_revision")
-
-        # Store review for audit trail
-        review_record = {
-            "critique": critique_raw,
-            "issues": issues,
-            "overall_score": overall_score,
-            "verdict": verdict,
-            "corrections": [],
-            "reviewed": False,
-        }
-        book_state.review = review_record
-
-        # Step 2: If major issues found, correct them
-        if verdict == "needs_revision" and issues:
-            logger.info("Review found %d issues to correct for '%s'", len(issues), book_state.title)
-            corrected_chapters = set()
-
-            for issue in issues:
-                chapter_title = issue.get("chapter", "")
-                if not chapter_title or chapter_title not in book_state.chapters:
-                    # If chapter title doesn't match, try fuzzy match
-                    matched = self._match_chapter_title(chapter_title, book_state.chapters)
-                    if matched:
-                        chapter_title = matched
-                    else:
-                        logger.warning("Could not match issue chapter '%s' to any generated chapter", chapter_title)
-                        continue
-
-                if chapter_title in corrected_chapters:
-                    continue  # Already corrected this chapter
-
-                description = issue.get("description", "")
-                suggestion = issue.get("suggestion", "")
-
-                # Build revision context
-                prior_context = ""
-                if book_state.chapter_summaries:
-                    prior_parts = []
-                    for outline_title in book_state.outline:
-                        if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
-                            prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
-                    if prior_parts:
-                        prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
-
-                revision_messages = [
-                    {"role": "system", "content": (
-                        "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
-                        "the specific issues identified while preserving the core narrative and style. "
-                        "Ensure consistency with the rest of the book."
-                    )},
-                    {"role": "user", "content": (
-                        f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-                        f"Book summary:\n{book_state.summary}\n\n"
-                        + prior_context + "\n\n"
-                        f"Issue identified in '{chapter_title}':\n"
-                        f"  Type: {issue.get('type', 'general')}\n"
-                        f"  Problem: {description}\n"
-                        f"  Suggested fix: {suggestion}\n\n"
-                        f"Current chapter content:\n{book_state.chapters[chapter_title]}\n\n"
-                        f"Rewrite this chapter to address the issue. Return only the revised chapter content."
-                    )},
-                ]
-
-                revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
-                revised_content = revision_response["choices"][0]["message"]["content"].strip()
-
-                # Update chapter and regenerate its summary
-                book_state.chapters[chapter_title] = revised_content
-                new_summary = await self._summarize_chapter(revised_content, chapter_title)
-                book_state.chapter_summaries[chapter_title] = new_summary
-                corrected_chapters.add(chapter_title)
-
-                # Record the correction for audit trail
-                review_record["corrections"].append({
-                    "chapter": chapter_title,
-                    "issue_type": issue.get("type", "general"),
-                    "issue_description": description,
-                    "suggestion": suggestion,
-                    "corrected": True,
-                })
-
-                # Save after each correction
+            # Update progress for UI
+            if turn_num > 1:
+                book_state.progress["current_step"] = f"reviewing (turn {turn_num})"
+                book_state.progress["percentage"] = 97 + int((turn_num - 1) / turns_limit * 3)
                 save_book(book_state.id, book_state)
 
-            review_record["reviewed"] = True
-            logger.info("Completed %d corrections for '%s'", len(corrected_chapters), book_state.title)
-        else:
-            review_record["reviewed"] = True
-            logger.info("Book '%s' passed review (score: %d/10)", book_state.title, overall_score)
+            # Build the full book text for review
+            review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+            review_text += f"Summary:\n{book_state.summary}\n\n"
+            review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
 
+            for idx, (title, content) in enumerate(book_state.chapters.items(), 1):
+                review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content}"
+
+            # If this is turn > 1, include prior review results for context
+            if turn_num > 1 and book_state.review_history:
+                review_text += "\n\n--- Previous Review History ---\n"
+                for prev in book_state.review_history:
+                    review_text += f"\nTurn {prev['turn']}:\n"
+                    review_text += f"  Score: {prev.get('overall_score', '?')}/10\n"
+                    review_text += f"  Verdict: {prev.get('verdict', '?')}\n"
+                    if prev.get('corrections'):
+                        for corr in prev['corrections']:
+                            review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
+
+            # Step 1: Professional critique (using reviewer client)
+            critique_messages = [
+                {"role": "system", "content": (
+                    "You are a professional book critic and editor with decades of experience. "
+                    "Review the following book critically. Identify any major issues including:\n"
+                    "- Plot holes or logical inconsistencies\n"
+                    "- Character inconsistencies (voice, motivation, development)\n"
+                    "- Pacing problems (rushed sections, dragging sections)\n"
+                    "- Continuity errors (events that contradict earlier chapters)\n"
+                    "- Tone or style inconsistencies across chapters\n"
+                    "- Unresolved plot threads or unsatisfying endings\n\n"
+                    "Return your review as a JSON object with this exact structure:\n"
+                    '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
+                    "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
+                    "If the book is solid (score >= 7), set verdict to 'ready' with an empty issues array."
+                )},
+                {"role": "user", "content": review_text},
+            ]
+
+            critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
+            critique_raw = critique_response["choices"][0]["message"]["content"].strip()
+
+            # Parse critique response
+            critique_data = self._parse_critique(critique_raw)
+            issues = critique_data.get("issues", [])
+            overall_score = critique_data.get("overall_score", 5)
+            verdict = critique_data.get("verdict", "needs_revision")
+
+            # Step 2: If issues found, correct them (using writer client)
+            corrections = []
+            if verdict == "needs_revision" and issues:
+                logger.info("Turn %d: Review found %d issues to correct", turn_num, len(issues))
+                corrected_chapters = set()
+
+                for issue in issues:
+                    chapter_title = issue.get("chapter", "")
+                    if not chapter_title or chapter_title not in book_state.chapters:
+                        # If chapter title doesn't match, try fuzzy match
+                        matched = self._match_chapter_title(chapter_title, book_state.chapters)
+                        if matched:
+                            chapter_title = matched
+                        else:
+                            logger.warning("Could not match issue chapter '%s' to any generated chapter", chapter_title)
+                            continue
+
+                    if chapter_title in corrected_chapters:
+                        continue  # Already corrected this chapter
+
+                    description = issue.get("description", "")
+                    suggestion = issue.get("suggestion", "")
+
+                    # Build revision context
+                    prior_context = ""
+                    if book_state.chapter_summaries:
+                        prior_parts = []
+                        for outline_title in book_state.outline:
+                            if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
+                                prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
+                        if prior_parts:
+                            prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
+
+                    revision_messages = [
+                        {"role": "system", "content": (
+                            "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
+                            "the specific issues identified while preserving the core narrative and style. "
+                            "Ensure consistency with the rest of the book."
+                        )},
+                        {"role": "user", "content": (
+                            f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+                            f"Book summary:\n{book_state.summary}\n\n"
+                            + prior_context + "\n\n"
+                            f"Issue identified in '{chapter_title}':\n"
+                            f"  Type: {issue.get('type', 'general')}\n"
+                            f"  Problem: {description}\n"
+                            f"  Suggested fix: {suggestion}\n\n"
+                            f"Current chapter content:\n{book_state.chapters[chapter_title]}\n\n"
+                            f"Rewrite this chapter to address the issue. Return only the revised chapter content."
+                        )},
+                    ]
+
+                    revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
+                    revised_content = revision_response["choices"][0]["message"]["content"].strip()
+
+                    # Update chapter and regenerate its summary
+                    book_state.chapters[chapter_title] = revised_content
+                    new_summary = await self._summarize_chapter(revised_content, chapter_title)
+                    book_state.chapter_summaries[chapter_title] = new_summary
+                    corrected_chapters.add(chapter_title)
+
+                    corrections.append({
+                        "chapter": chapter_title,
+                        "issue_type": issue.get("type", "general"),
+                        "issue_description": description,
+                        "suggestion": suggestion,
+                        "corrected": True,
+                    })
+
+                    # Save after each correction
+                    save_book(book_state.id, book_state)
+
+                logger.info("Turn %d: Completed %d corrections", turn_num, len(corrected_chapters))
+            else:
+                logger.info("Turn %d: Book passed review (score: %d/10)", turn_num, overall_score)
+
+            # Record this turn in history
+            turn_record = {
+                "turn": turn_num,
+                "critique": critique_raw,
+                "issues": issues,
+                "overall_score": overall_score,
+                "verdict": verdict,
+                "corrections": corrections,
+            }
+            book_state.review_history.append(turn_record)
+            # Also keep the latest as `review` for backward compat
+            book_state.review = turn_record
+
+            save_book(book_state.id, book_state)
+
+            # If book passes review, we're done
+            if verdict == "ready" or not issues:
+                logger.info("Book '%s' passed review after %d turn(s) (score: %d/10)",
+                           book_state.title, turn_num, overall_score)
+                book_state.review["reviewed"] = True
+                _transition(book_state, "reviewed")
+                book_state.progress["current_step"] = "reviewed"
+                book_state.progress["percentage"] = 100
+                save_book(book_state.id, book_state)
+                return book_state.review_history
+
+        # Max turns reached without passing — mark as reviewed anyway with note
+        logger.warning("Book '%s' did not pass review after %d turns", book_state.title, turns_limit)
+        book_state.review["reviewed"] = True
+        book_state.review["max_turns_reached"] = True
+        book_state.review["message"] = f"Review completed after {turns_limit} turns. Some issues may remain."
         _transition(book_state, "reviewed")
         book_state.progress["current_step"] = "reviewed"
         book_state.progress["percentage"] = 100
         save_book(book_state.id, book_state)
 
-        return review_record
+        return book_state.review_history
 
     def _parse_critique(self, raw: str) -> dict:
         """Parse the critique response from the LLM, handling various formats."""
