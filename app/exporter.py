@@ -251,6 +251,7 @@ def export_to_epub(
     chapters: dict,
     tags: list[str] = None,
     output_dir: str = None,
+    review: dict = None,
 ):
     """Export a book to EPUB format. Returns the absolute path to the file."""
     if output_dir is None:
@@ -282,6 +283,13 @@ def export_to_epub(
     cover_page = epub.EpubHtml(title='Cover', file_name='cover.xhtml', lang='en')
     cover_html = '<div class="cover-page">'
     cover_html += f'<h1>{html_lib.escape(title)}</h1>'
+    if tags:
+        cover_html += f'<p style="margin-top:1rem;font-size:0.9em;opacity:0.7;">{html_lib.escape(", ".join(tags))}</p>'
+    if review:
+        score = review.get('overall_score', '')
+        verdict = review.get('verdict', '')
+        if score:
+            cover_html += f'<p style="margin-top:0.5rem;font-size:0.8em;opacity:0.6;">Reviewed: {score}/10 ({verdict})</p>'
     cover_html += '</div>'
     cover_page.content = cover_html
     book.add_item(cover_page)
@@ -322,6 +330,7 @@ def export_to_pdf(
     chapters: dict,
     tags: list[str] = None,
     output_dir: str = None,
+    review: dict = None,
 ):
     """Export a book to PDF format. Returns the absolute path to the file."""
     if output_dir is None:
@@ -351,6 +360,16 @@ def export_to_pdf(
     if tags:
         pdf.set_font("DejaVu", size=11)
         pdf.cell(200, 7, txt=", ".join(tags), ln=True, align='C')
+    if review:
+        score = review.get('overall_score', '')
+        verdict = review.get('verdict', '')
+        corrections = review.get('corrections', [])
+        pdf.ln(2)
+        pdf.set_font("DejaVu", size=9)
+        if score:
+            pdf.cell(200, 6, txt=f'Reviewed: {score}/10 ({verdict})', ln=True, align='C')
+        if corrections:
+            pdf.cell(200, 6, txt=f'{len(corrections)} correction(s) applied', ln=True, align='C')
     pdf.ln(10)
 
     for c_title, content in chapters.items():

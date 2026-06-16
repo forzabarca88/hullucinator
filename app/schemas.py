@@ -14,12 +14,17 @@ class BookState(BaseModel):
     prompt: str
     tags: list[str] = []
     length: str = "novel"  # short_story | novella | novel | epic
-    status: str  # pending | summary_generated | outline_generated | in_progress | completed | failed
+    status: str  # pending | summary_generated | outline_generated | in_progress | completed | reviewing | reviewed | failed
 
     summary: Optional[str] = None
     outline: Optional[List[str]] = None
     chapters: Optional[Dict[str, str]] = None
+    # Condensed one-paragraph summaries of each chapter (for continuity context)
+    chapter_summaries: Optional[Dict[str, str]] = None
     metadata: Optional[Dict[str, Any]] = None
+
+    # Review audit trail
+    review: Optional[Dict[str, Any]] = None  # {"critique": str, "corrections": list[dict], "reviewed": bool}
 
     # Progress tracking for the web interface
     progress: Dict[str, Any] = Field(default_factory=lambda: {

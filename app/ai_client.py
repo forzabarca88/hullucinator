@@ -1,10 +1,12 @@
 """
 HTTP client for OpenAI-compatible LLM API endpoints.
 
-Key fixes:
+Key features:
 - Reuses a single httpx.AsyncClient instead of creating one per request
 - Uses async `await asyncio.sleep()` instead of blocking `time.sleep()`
 - Configurable via environment variables
+- Runtime-reconfigurable endpoint, model, and API key
+- Model listing via OpenAI-compatible /v1/models endpoint
 """
 import asyncio
 import logging
@@ -17,13 +19,105 @@ logger = logging.getLogger(__name__)
 
 class AIClient:
     def __init__(self, endpoint_url: str, model_name: str, api_key: Optional[str] = None):
-        self.endpoint_url = endpoint_url.rstrip('/')
-        self.model_name = model_name
-        self.headers = {"Content-Type": "application/json"}
+        self._endpoint_url = endpoint_url.rstrip('/')
+        self._model_name = model_name
+        self._api_key = api_key
+        self._headers = {"Content-Type": "application/json"}
         if api_key:
-            self.headers["Authorization"] = f"Bearer {api_key}"
+            self._headers["Authorization"] = f"Bearer {api_key}"
         # Single persistent async client reused across all requests
         self._client = httpx.AsyncClient(timeout=1800.0)
+
+    # ── Mutable configuration properties ──────────────────────────────
+
+    @property
+    def endpoint_url(self) -> str:
+        return self._endpoint_url
+
+    @endpoint_url.setter
+    def endpoint_url(self, value: str):
+        self._endpoint_url = value.rstrip('/')
+        logger.info("AI endpoint URL changed to: %s", self._endpoint_url)
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @model_name.setter
+    def model_name(self, value: str):
+        self._model_name = value
+        logger.info("AI model changed to: %s", self._model_name)
+
+    @property
+    def api_key(self) -> Optional[str]:
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: Optional[str]):
+        self._api_key = value
+        if value:
+            self._headers["Authorization"] = f"Bearer {value}"
+        elif "Authorization" in self._headers:
+            del self._headers["Authorization"]
+        logger.info("AI API key updated")
+
+    def get_config(self) -> Dict[str, Any]:
+        """Return current AI configuration."""
+        return {
+            "endpoint_url": self._endpoint_url,
+            "model_name": self._model_name,
+            "api_key_set": self._api_key is not None and self._api_key != "",
+        }
+
+    async def update_config(self, endpoint_url: Optional[str] = None,
+                            model_name: Optional[str] = None,
+                            api_key: Optional[str] = None):
+        """Update AI configuration at runtime."""
+        if endpoint_url is not None:
+            self.endpoint_url = endpoint_url
+        if model_name is not None:
+            self.model_name = model_name
+        if api_key is not None:
+            self.api_key = api_key
+
+    async def list_models(self) -> List[Dict[str, Any]]:
+        """
+        Fetch the list of available models from the LLM API.
+        Uses the OpenAI-compatible /v1/models endpoint.
+        """
+        url = f"{self._endpoint_url}/v1/models"
+        try:
+            response = await self._client.get(url, headers=self._headers)
+            response.raise_for_status()
+            result = response.json()
+
+            # Handle both OpenAI-style and generic responses
+            models = []
+            if "data" in result:
+                for item in result["data"]:
+                    models.append({
+                        "id": item.get("id", item.get("name", "")),
+                        "name": item.get("id", item.get("name", "")),
+                    })
+            elif isinstance(result, list):
+                for item in result:
+                    models.append({
+                        "id": item.get("id", item.get("name", "")),
+                        "name": item.get("id", item.get("name", "")),
+                    })
+            else:
+                # Try to extract model info from a dict response
+                models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+
+            logger.info("Fetched %d models from %s", len(models), self._endpoint_url)
+            return models
+
+        except httpx.HTTPStatusError as e:
+            logger.warning("Model listing failed (HTTP %d): %s", e.response.status_code, e.response.text)
+            return []
+        except Exception as e:
+            logger.warning("Model listing failed: %s", e)
+            return []
 
     async def generate_completion(
         self,
@@ -37,9 +131,9 @@ class AIClient:
         Retries on 429/500/503 status codes or empty responses.
         Uses async sleep to avoid blocking the event loop.
         """
-        url = f"{self.endpoint_url}/v1/chat/completions"
+        url = f"{self._endpoint_url}/v1/chat/completions"
         payload = {
-            "model": self.model_name,
+            "model": self._model_name,
             "messages": messages,
             "temperature": temperature,
         }
@@ -47,7 +141,7 @@ class AIClient:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                response = await self._client.post(url, json=payload, headers=self.headers)
+                response = await self._client.post(url, json=payload, headers=self._headers)
                 response.raise_for_status()
                 result = response.json()
 

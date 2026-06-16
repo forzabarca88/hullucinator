@@ -3,10 +3,13 @@ Hullucinator — AI-Powered E-Book Generator
 
 FastAPI application with:
 - Environment-variable configuration (AI endpoint, model, API key)
+- Runtime-reconfigurable AI settings via API
+- Model listing from the LLM provider
 - Background task support for non-blocking book generation
 - Progress polling endpoint for the web interface
+- Post-completion book review with correction loop
 - Static file serving for the polished web UI
-- All REST API endpoints (create, list, get, validate, export)
+- All REST API endpoints (create, list, get, validate, export, review)
 """
 import os
 import sys
@@ -18,7 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas import BookState, BookCreateRequest
 from app.ai_client import AIClient
@@ -62,6 +65,7 @@ async def _run_generation_pipeline(book_id: str):
     """
     Run the full book generation pipeline as a background task.
     Updates book state on disk at each step for progress polling.
+    After chapters are complete, runs the review step automatically.
     """
     book_state = load_book(book_id)
     if not book_state:
@@ -72,7 +76,9 @@ async def _run_generation_pipeline(book_id: str):
         await orchestrator.generate_summary(book_state)
         await orchestrator.generate_outline(book_state)
         await orchestrator.generate_chapters(book_state)
-        logger.info("Book '%s' (%s) generation completed", book_state.title, book_id)
+        # Auto-trigger review after chapters are complete
+        await orchestrator.review_book(book_state)
+        logger.info("Book '%s' (%s) generation + review completed", book_state.title, book_id)
 
     except Exception as e:
         logger.error("Book '%s' (%s) generation failed: %s", book_state.title, book_id, e)
@@ -84,6 +90,19 @@ async def _run_generation_pipeline(book_id: str):
 
     finally:
         _active_tasks.pop(book_id, None)
+
+
+# ── Request/Response schemas ────────────────────────────────────────────
+
+class AIConfigUpdate(BaseModel):
+    endpoint_url: str | None = None
+    model_name: str | None = None
+    api_key: str | None = None
+
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str
 
 
 # ── Lifespan ────────────────────────────────────────────────────────────
@@ -103,7 +122,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Hullucinator",
     description="AI-Powered E-Book Generator — generate complete e-books from a simple prompt",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -229,6 +248,34 @@ async def health_check():
     return {"status": "healthy", "service": "hullucinator"}
 
 
+# ── AI Configuration Endpoints ──────────────────────────────────────────
+
+@app.get("/api/config")
+async def get_ai_config():
+    """Get current AI configuration."""
+    return ai_client.get_config()
+
+
+@app.post("/api/config")
+async def update_ai_config(config: AIConfigUpdate):
+    """Update AI configuration at runtime."""
+    await ai_client.update_config(
+        endpoint_url=config.endpoint_url,
+        model_name=config.model_name,
+        api_key=config.api_key,
+    )
+    return {"status": "ok", "config": ai_client.get_config()}
+
+
+@app.get("/api/models")
+async def list_available_models():
+    """List available models from the LLM provider."""
+    models = await ai_client.list_models()
+    return {"models": models, "current_model": ai_client.model_name}
+
+
+# ── Book Endpoints ──────────────────────────────────────────────────────
+
 @app.post("/api/books/create")
 async def create_book(request: BookCreateRequest, background_tasks: BackgroundTasks):
     """
@@ -296,10 +343,52 @@ async def validate_book(book_id: str):
     return orchestrator.validate_book(book_state)
 
 
+@app.post("/api/books/{book_id}/review")
+async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
+    """
+    Trigger a professional review of a completed book.
+
+    The review runs in the background. Poll the book status to track progress.
+    """
+    book_state = load_book(book_id)
+    if not book_state:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    if book_state.status not in ("completed", "reviewing"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot review: book is in '{book_state.status}' status. Must be 'completed'.",
+        )
+
+    async def _run_review():
+        try:
+            # Reload to get latest state
+            book = load_book(book_id)
+            if not book:
+                return
+            await orchestrator.review_book(book)
+            logger.info("Review completed for '%s' (%s)", book.title, book_id)
+        except Exception as e:
+            logger.error("Review failed for book %s: %s", book_id, e)
+            book = load_book(book_id)
+            if book:
+                book.status = "failed"
+                book.metadata = {"error": str(e)}
+                book.progress["current_step"] = "review_failed"
+                book.progress["error"] = str(e)
+                save_book(book_id, book)
+
+    import asyncio
+    task = asyncio.create_task(_run_review())
+    _active_tasks[book_id] = task
+
+    return {"status": "review_started", "book_id": book_id}
+
+
 @app.get("/api/books/{book_id}/export/{fmt}")
 async def export_book(book_id: str, fmt: str):
     """
-    Export a completed book to EPUB or PDF.
+    Export a completed or reviewed book to EPUB or PDF.
 
     Validates the book before exporting.
     """
@@ -315,15 +404,16 @@ async def export_book(book_id: str, fmt: str):
         )
 
     try:
+        review_data = book_state.review if book_state.review else None
         if fmt == "epub":
-            path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags)
+            path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
             return FileResponse(
                 path,
                 media_type="application/epub+zip",
                 filename=f"{book_state.title}.epub",
             )
         elif fmt == "pdf":
-            path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags)
+            path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
             return FileResponse(
                 path,
                 media_type="application/pdf",
@@ -353,7 +443,7 @@ def main():
         "--port", type=int, default=PORT, help="Port (default: %(default)s)"
     )
     parser.add_argument(
-        "--version", action="version", version="%(prog)s 1.0.0"
+        "--version", action="version", version="%(prog)s 1.1.0"
     )
 
     args = parser.parse_args()

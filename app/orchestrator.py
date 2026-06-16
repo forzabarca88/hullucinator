@@ -3,9 +3,16 @@ Pipeline coordinator for book generation.
 
 Each step validates preconditions before proceeding and persists state
 to disk. Status transitions are enforced to prevent data inconsistencies.
+
+Key features:
+- Chapter continuity: each chapter receives cumulative context from prior chapters
+- Post-completion review: professional critic reviews the finished book
+- Correction loop: major issues identified by the critic are corrected
+- Full audit trail: review results stored in book metadata
 """
 import logging
 import re
+import json
 from typing import List, Optional
 
 from app.ai_client import AIClient
@@ -20,7 +27,9 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
     "summary_generated": ["outline_generated", "failed"],
     "outline_generated": ["in_progress", "failed"],
     "in_progress": ["completed", "failed"],
-    "completed": ["failed"],
+    "completed": ["reviewing", "failed"],
+    "reviewing": ["reviewed", "failed"],
+    "reviewed": ["failed"],
     "failed": ["pending"],  # allow retry
 }
 
@@ -127,8 +136,6 @@ class Orchestrator:
         - Markdown headings: # Chapter 1, ## Chapter 2
         - Bullet lists: - Title, * Title
         """
-        import json
-
         # Clean up markdown code blocks
         clean = outline_content.strip()
         if clean.startswith("```"):
@@ -234,6 +241,7 @@ class Orchestrator:
         outline = self._parse_outline(outline_content)
 
         book_state.outline = outline
+        book_state.chapter_summaries = {}  # Initialize for continuity tracking
         _transition(book_state, "outline_generated")
         book_state.progress["current_step"] = "outline_generated"
         book_state.progress["total_chapters"] = len(outline)
@@ -242,8 +250,80 @@ class Orchestrator:
         save_book(book_state.id, book_state)
         return outline
 
+    async def _generate_chapter(self, book_state: BookState, idx: int, chapter_title: str, total: int) -> str:
+        """
+        Generate a single chapter with full context from prior chapters.
+
+        Context strategy: Each chapter receives:
+        1. The book summary (overall direction)
+        2. The full outline (structural awareness)
+        3. Condensed summaries of all previously generated chapters (narrative continuity)
+
+        This ensures each chapter flows naturally from what came before without
+        consuming excessive tokens from full chapter text.
+        """
+        tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+        length = book_state.length or "novel"
+        word_count = LENGTH_WORD_COUNT.get(length, "20,000-50,000")
+
+        # Build cumulative context from prior chapter summaries
+        prior_context = ""
+        if idx > 1 and book_state.chapter_summaries:
+            # Include summaries of all prior chapters in order
+            prior_parts = []
+            for outline_title in book_state.outline[:idx - 1]:
+                if outline_title in book_state.chapter_summaries:
+                    prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
+            if prior_parts:
+                prior_context = "\n\nPrevious chapters (summary of events so far):\n" + "\n".join(prior_parts)
+
+        system_prompt = (
+            "You are a skilled fiction writer. Write a full, engaging book chapter based on the provided "
+            "context. The chapter should be well-structured with proper paragraphs, "
+            "dialogue, and descriptive prose. Ensure it flows naturally from the previous chapters."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Book title: {book_state.title}\n"
+                f"Genre/Tags: {tags_str}\n"
+                f"Book length: {length} (target: {word_count} words total)\n\n"
+                f"Book summary:\n{book_state.summary}\n\n"
+                f"Full chapter outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
+                + prior_context + "\n\n"
+                f"Write the full content for chapter {idx} of {total}:\n\n**{chapter_title}**\n\n"
+                f"Continue the story naturally from where the previous chapters left off. "
+                f"Maintain consistent character voices, plot threads, and tone. "
+                f"This chapter should advance the narrative meaningfully."
+            )},
+        ]
+
+        response = await self.ai_client.generate_completion(messages, temperature=0.8)
+        return response["choices"][0]["message"]["content"].strip()
+
+    async def _summarize_chapter(self, chapter_content: str, chapter_title: str) -> str:
+        """
+        Generate a concise one-paragraph summary of a chapter.
+        Used to provide continuity context for subsequent chapters.
+        """
+        messages = [
+            {"role": "system", "content": (
+                "You are a literary analyst. Summarize the following chapter in a single, concise paragraph "
+                "(2-4 sentences) capturing the key events, character developments, and any plot threads "
+                "that carry forward to the next chapter."
+            )},
+            {"role": "user", "content": (
+                f"Chapter: {chapter_title}\n\n"
+                f"Content:\n{chapter_content}\n\n"
+                f"Provide only the summary paragraph, nothing else."
+            )},
+        ]
+
+        response = await self.ai_client.generate_completion(messages, temperature=0.3)
+        return response["choices"][0]["message"]["content"].strip()
+
     async def generate_chapters(self, book_state: BookState):
-        """Generate all chapters from the outline."""
+        """Generate all chapters from the outline, with continuity context."""
         if book_state.status != "outline_generated":
             raise ValueError(
                 f"Cannot generate chapters: book is in '{book_state.status}' status (expected 'outline_generated')"
@@ -253,44 +333,259 @@ class Orchestrator:
 
         _transition(book_state, "in_progress")
         book_state.chapters = {}
+        book_state.chapter_summaries = book_state.chapter_summaries or {}
         book_state.progress["current_step"] = "in_progress"
         book_state.progress["chapters_completed"] = 0
 
-        tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
-        length = book_state.length or "novel"
-        word_count = LENGTH_WORD_COUNT.get(length, "20,000-50,000")
-
         total = len(book_state.outline)
-        for idx, chapter in enumerate(book_state.outline, 1):
-            system_prompt = (
-                "You are a skilled writer. Write a full, engaging book chapter based on the provided "
-                "summary and chapter title. The chapter should be well-structured with proper paragraphs, "
-                "dialogue, and descriptive prose."
-            )
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": (
-                    f"Book summary:\n{book_state.summary}\n\n"
-                    f"Genre/Tags: {tags_str}\n"
-                    f"Book length: {length} (target: {word_count} words total)\n\n"
-                    f"Write the full content for this chapter:\n\n**{chapter}**\n\n"
-                    f"This is chapter {idx} of {total}. "
-                    f"Continue the story naturally from the previous chapters."
-                )},
-            ]
+        for idx, chapter_title in enumerate(book_state.outline, 1):
+            logger.info("Generating chapter %d/%d: %s", idx, total, chapter_title)
 
-            response = await self.ai_client.generate_completion(messages)
-            content = response["choices"][0]["message"]["content"].strip()
-            book_state.chapters[chapter] = content
+            content = await self._generate_chapter(book_state, idx, chapter_title, total)
+            book_state.chapters[chapter_title] = content
+
+            # Generate a condensed summary for continuity context
+            chapter_summary = await self._summarize_chapter(content, chapter_title)
+            book_state.chapter_summaries[chapter_title] = chapter_summary
+            logger.info("Chapter %d summary: %s", idx, chapter_summary[:80] + "...")
 
             # Update progress
             book_state.progress["chapters_completed"] = idx
-            book_state.progress["percentage"] = 50 + int((idx / total) * 50)
+            book_state.progress["percentage"] = 50 + int((idx / total) * 45)  # Reserve 5% for review
             save_book(book_state.id, book_state)
 
         _transition(book_state, "completed")
         book_state.progress["current_step"] = "completed"
-        book_state.progress["percentage"] = 100
+        book_state.progress["percentage"] = 95
         save_book(book_state.id, book_state)
 
         return book_state.chapters
+
+    async def review_book(self, book_state: BookState):
+        """
+        Review the completed book as a professional critic.
+        Identifies major issues (plot holes, pacing, consistency, etc.)
+        and corrects them if found.
+
+        The full review is stored in book_state.review for audit purposes.
+        """
+        if book_state.status not in ("completed", "reviewing"):
+            raise ValueError(
+                f"Cannot review book: book is in '{book_state.status}' status (expected 'completed' or 'reviewing')"
+            )
+
+        if not book_state.chapters or not book_state.summary:
+            raise ValueError("Cannot review: book content is incomplete")
+
+        if book_state.status == "completed":
+            _transition(book_state, "reviewing")
+            book_state.progress["current_step"] = "reviewing"
+            book_state.progress["percentage"] = 97
+            save_book(book_state.id, book_state)
+
+        tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+
+        # Build the full book text for review (summary + outline + all chapters)
+        review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+        review_text += f"Summary:\n{book_state.summary}\n\n"
+        review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
+
+        for idx, (title, content) in enumerate(book_state.chapters.items(), 1):
+            review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content}"
+
+        # Step 1: Professional critique
+        logger.info("Running professional book review for '%s'...", book_state.title)
+        critique_messages = [
+            {"role": "system", "content": (
+                "You are a professional book critic and editor with decades of experience. "
+                "Review the following book critically. Identify any major issues including:\n"
+                "- Plot holes or logical inconsistencies\n"
+                "- Character inconsistencies (voice, motivation, development)\n"
+                "- Pacing problems (rushed sections, dragging sections)\n"
+                "- Continuity errors (events that contradict earlier chapters)\n"
+                "- Tone or style inconsistencies across chapters\n"
+                "- Unresolved plot threads or unsatisfying endings\n\n"
+                "Return your review as a JSON object with this exact structure:\n"
+                '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
+                "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
+                "If the book is solid, set verdict to 'ready' with an empty issues array."
+            )},
+            {"role": "user", "content": review_text},
+        ]
+
+        critique_response = await self.ai_client.generate_completion(critique_messages, temperature=0.3)
+        critique_raw = critique_response["choices"][0]["message"]["content"].strip()
+
+        # Parse critique response
+        critique_data = self._parse_critique(critique_raw)
+        issues = critique_data.get("issues", [])
+        overall_score = critique_data.get("overall_score", 5)
+        verdict = critique_data.get("verdict", "needs_revision")
+
+        # Store review for audit trail
+        review_record = {
+            "critique": critique_raw,
+            "issues": issues,
+            "overall_score": overall_score,
+            "verdict": verdict,
+            "corrections": [],
+            "reviewed": False,
+        }
+        book_state.review = review_record
+
+        # Step 2: If major issues found, correct them
+        if verdict == "needs_revision" and issues:
+            logger.info("Review found %d issues to correct for '%s'", len(issues), book_state.title)
+            corrected_chapters = set()
+
+            for issue in issues:
+                chapter_title = issue.get("chapter", "")
+                if not chapter_title or chapter_title not in book_state.chapters:
+                    # If chapter title doesn't match, try fuzzy match
+                    matched = self._match_chapter_title(chapter_title, book_state.chapters)
+                    if matched:
+                        chapter_title = matched
+                    else:
+                        logger.warning("Could not match issue chapter '%s' to any generated chapter", chapter_title)
+                        continue
+
+                if chapter_title in corrected_chapters:
+                    continue  # Already corrected this chapter
+
+                description = issue.get("description", "")
+                suggestion = issue.get("suggestion", "")
+
+                # Build revision context
+                prior_context = ""
+                if book_state.chapter_summaries:
+                    prior_parts = []
+                    for outline_title in book_state.outline:
+                        if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
+                            prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
+                    if prior_parts:
+                        prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
+
+                revision_messages = [
+                    {"role": "system", "content": (
+                        "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
+                        "the specific issues identified while preserving the core narrative and style. "
+                        "Ensure consistency with the rest of the book."
+                    )},
+                    {"role": "user", "content": (
+                        f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+                        f"Book summary:\n{book_state.summary}\n\n"
+                        + prior_context + "\n\n"
+                        f"Issue identified in '{chapter_title}':\n"
+                        f"  Type: {issue.get('type', 'general')}\n"
+                        f"  Problem: {description}\n"
+                        f"  Suggested fix: {suggestion}\n\n"
+                        f"Current chapter content:\n{book_state.chapters[chapter_title]}\n\n"
+                        f"Rewrite this chapter to address the issue. Return only the revised chapter content."
+                    )},
+                ]
+
+                revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
+                revised_content = revision_response["choices"][0]["message"]["content"].strip()
+
+                # Update chapter and regenerate its summary
+                book_state.chapters[chapter_title] = revised_content
+                new_summary = await self._summarize_chapter(revised_content, chapter_title)
+                book_state.chapter_summaries[chapter_title] = new_summary
+                corrected_chapters.add(chapter_title)
+
+                # Record the correction for audit trail
+                review_record["corrections"].append({
+                    "chapter": chapter_title,
+                    "issue_type": issue.get("type", "general"),
+                    "issue_description": description,
+                    "suggestion": suggestion,
+                    "corrected": True,
+                })
+
+                # Save after each correction
+                save_book(book_state.id, book_state)
+
+            review_record["reviewed"] = True
+            logger.info("Completed %d corrections for '%s'", len(corrected_chapters), book_state.title)
+        else:
+            review_record["reviewed"] = True
+            logger.info("Book '%s' passed review (score: %d/10)", book_state.title, overall_score)
+
+        _transition(book_state, "reviewed")
+        book_state.progress["current_step"] = "reviewed"
+        book_state.progress["percentage"] = 100
+        save_book(book_state.id, book_state)
+
+        return review_record
+
+    def _parse_critique(self, raw: str) -> dict:
+        """Parse the critique response from the LLM, handling various formats."""
+        # Try to extract JSON from the response
+        clean = raw.strip()
+
+        # Remove markdown code fences
+        if clean.startswith("```"):
+            parts = clean.split("```")
+            if len(parts) >= 2:
+                clean = parts[1]
+            first_newline = clean.find("\n")
+            if first_newline > 0 and clean[:first_newline].strip().isalpha():
+                clean = clean[first_newline + 1:]
+            clean = clean.strip()
+
+        # Try JSON parsing
+        try:
+            data = json.loads(clean)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Fallback: parse from text
+        result = {"issues": [], "overall_score": 5, "verdict": "ready"}
+
+        # Try to extract score
+        score_match = re.search(r'score[:\s]*(\d+)', clean, re.IGNORECASE)
+        if score_match:
+            result["overall_score"] = int(score_match.group(1))
+
+        # Try to extract issues
+        issue_blocks = re.split(r'(?:issue|problem|finding)\s*#?\s*\d+', clean, flags=re.IGNORECASE)
+        for block in issue_blocks[1:]:
+            chapter_match = re.search(r'chapter[:\s"]*(.+?)[":\s,]', block, re.IGNORECASE)
+            type_match = re.search(r'type[:\s"]*(.+?)[":\s,]', block, re.IGNORECASE)
+            desc_match = re.search(r'(?:description|problem)[:\s"]*(.+?)[":\s\n]', block, re.IGNORECASE)
+            sugg_match = re.search(r'suggestion[:\s"]*(.+?)[":\s\n]', block, re.IGNORECASE)
+
+            if desc_match:
+                result["issues"].append({
+                    "chapter": chapter_match.group(1).strip().strip('"') if chapter_match else "unknown",
+                    "type": type_match.group(1).strip().strip('"') if type_match else "general",
+                    "description": desc_match.group(1).strip().strip('"'),
+                    "suggestion": sugg_match.group(1).strip().strip('"') if sugg_match else "Review and revise",
+                })
+
+        if result["issues"]:
+            result["verdict"] = "needs_revision"
+
+        return result
+
+    def _match_chapter_title(self, query: str, chapters: dict) -> Optional[str]:
+        """Find the best matching chapter title for a given query string."""
+        query_lower = query.lower().strip()
+        best_match = None
+        best_score = 0
+
+        for title in chapters:
+            title_lower = title.lower().strip()
+            # Exact match
+            if query_lower == title_lower:
+                return title
+            # Contains match
+            if query_lower in title_lower or title_lower in query_lower:
+                score = min(len(query_lower), len(title_lower)) / max(len(query_lower), len(title_lower))
+                if score > best_score:
+                    best_score = score
+                    best_match = title
+
+        return best_match if best_score > 0.5 else None

@@ -95,6 +95,126 @@ body {
   z-index: 1;
 }
 
+/* ── Settings Toggle ───────────────────────────────────────────────── */
+.settings-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 500;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s;
+}
+
+.settings-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.settings-toggle .icon { font-size: 1.1rem; }
+
+/* ── Settings Panel ────────────────────────────────────────────────── */
+.settings-panel {
+  display: none;
+  position: fixed;
+  top: 3.5rem;
+  right: 1rem;
+  z-index: 500;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  width: 380px;
+  box-shadow: var(--shadow);
+  animation: slideIn 0.3s ease;
+}
+
+.settings-panel.active { display: block; }
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-panel h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-panel .form-group {
+  margin-bottom: 1rem;
+}
+
+.settings-panel .form-group label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-panel .form-group input,
+.settings-panel .form-group select {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.settings-panel .form-group input:focus,
+.settings-panel .form-group select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.settings-panel .form-group small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin-top: 0.2rem;
+  display: block;
+}
+
+.settings-panel .model-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+}
+
+.settings-panel .model-status .current {
+  color: var(--success);
+  font-family: var(--mono);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
 /* ── Create Book Form ─────────────────────────────────────────────── */
 .create-section {
   background: var(--bg-card);
@@ -231,6 +351,11 @@ body {
   color: white;
 }
 
+.btn-review {
+  background: linear-gradient(135deg, #9b59b6, #8e44ad);
+  color: white;
+}
+
 .form-actions {
   display: flex;
   gap: 1rem;
@@ -324,6 +449,8 @@ body {
 .status-outline_generated { background: rgba(243,156,18,0.15); color: var(--warning); }
 .status-in_progress { background: rgba(243,156,18,0.15); color: var(--warning); }
 .status-completed { background: rgba(46,204,113,0.15); color: var(--success); }
+.status-reviewing { background: rgba(155,89,182,0.15); color: #9b59b6; }
+.status-reviewed { background: rgba(46,204,113,0.25); color: #2ecc71; }
 .status-failed { background: rgba(231,76,60,0.15); color: var(--danger); }
 
 .status-dot {
@@ -333,7 +460,8 @@ body {
   background: currentColor;
 }
 
-.status-in_progress .status-dot {
+.status-in_progress .status-dot,
+.status-reviewing .status-dot {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -391,6 +519,17 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* ── Review Badge ──────────────────────────────────────────────────── */
+.review-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  background: rgba(155, 89, 182, 0.15);
+  color: #9b59b6;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
 /* ── Progress Bar ─────────────────────────────────────────────────── */
 .progress-bar-container {
   margin-top: 0.6rem;
@@ -399,7 +538,8 @@ body {
 
 .book-card[data-status="in_progress"] .progress-bar-container,
 .book-card[data-status="summary_generated"] .progress-bar-container,
-.book-card[data-status="outline_generated"] .progress-bar-container {
+.book-card[data-status="outline_generated"] .progress-bar-container,
+.book-card[data-status="reviewing"] .progress-bar-container {
   display: block;
 }
 
@@ -416,6 +556,10 @@ body {
   border-radius: 3px;
   transition: width 0.5s ease;
   width: 0%;
+}
+
+.progress-bar-fill.review {
+  background: linear-gradient(90deg, #9b59b6, var(--accent));
 }
 
 .progress-text {
@@ -522,6 +666,120 @@ body {
   gap: 0.8rem;
   padding: 1rem 2rem 1.5rem;
   border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+/* ── Review Section in Modal ───────────────────────────────────────── */
+.review-section {
+  background: rgba(155, 89, 182, 0.08);
+  border: 1px solid rgba(155, 89, 182, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.2rem;
+  margin-bottom: 1.5rem;
+}
+
+.review-section h3 {
+  color: #9b59b6;
+}
+
+.review-score {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.8rem;
+}
+
+.review-score .score-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+
+.review-score .score-value.high { color: var(--success); }
+.review-score .score-value.medium { color: var(--warning); }
+.review-score .score-value.low { color: var(--danger); }
+
+.review-score .score-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.review-verdict {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 0.8rem;
+}
+
+.review-verdict.passed {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--success);
+}
+
+.review-verdict.needs_revision {
+  background: rgba(243, 156, 18, 0.15);
+  color: var(--warning);
+}
+
+.review-critique {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  margin-bottom: 0.8rem;
+  max-height: 120px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  padding: 0.8rem;
+  border-radius: var(--radius-sm);
+}
+
+.review-corrections {
+  margin-top: 0.5rem;
+}
+
+.review-corrections h4 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #9b59b6;
+  margin-bottom: 0.5rem;
+}
+
+.correction-item {
+  background: var(--bg-secondary);
+  border: 1px solid rgba(155, 89, 182, 0.15);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.correction-item .chapter-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.correction-item .issue-type {
+  color: var(--warning);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.correction-item .issue-desc {
+  color: var(--text-secondary);
+  margin-top: 0.2rem;
+}
+
+.correction-item .corrected-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--success);
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  margin-top: 0.3rem;
 }
 
 /* ── Empty State ──────────────────────────────────────────────────── */
@@ -603,10 +861,53 @@ body {
   .modal { margin: 1rem; max-height: 90vh; }
   .modal-header, .modal-body, .modal-actions { padding-left: 1.2rem; padding-right: 1.2rem; }
   .modal-actions { flex-wrap: wrap; }
+  .settings-panel { width: calc(100vw - 2rem); right: 0.5rem; }
 }
 </style>
 </head>
 <body>
+
+<!-- Settings Toggle Button -->
+<button class="settings-toggle" id="settingsToggle" onclick="toggleSettings()">
+  <span class="icon">⚙️</span> Settings
+</button>
+
+<!-- Settings Panel -->
+<div class="settings-panel" id="settingsPanel">
+  <h3>⚙️ AI Provider Settings</h3>
+
+  <div class="form-group">
+    <label for="settingsEndpoint">Endpoint URL</label>
+    <input type="text" id="settingsEndpoint" placeholder="http://localhost:1234">
+    <small>Base URL of your OpenAI-compatible LLM server</small>
+  </div>
+
+  <div class="form-group">
+    <label for="settingsApiKey">API Key</label>
+    <input type="password" id="settingsApiKey" placeholder="sk-...">
+    <small>Bearer token for authentication</small>
+  </div>
+
+  <div class="form-group">
+    <label for="settingsModel">Model</label>
+    <select id="settingsModel">
+      <option value="">Loading models...</option>
+    </select>
+    <div class="model-status">
+      <span>Current:</span>
+      <span class="current" id="currentModel">—</span>
+    </div>
+  </div>
+
+  <div class="settings-actions">
+    <button class="btn btn-primary btn-sm" id="saveSettingsBtn" onclick="saveSettings()">
+      Save Settings
+    </button>
+    <button class="btn btn-secondary btn-sm" onclick="refreshModels()">
+      🔄 Refresh Models
+    </button>
+  </div>
+</div>
 
 <div class="app-container">
   <!-- Hero -->
@@ -715,6 +1016,8 @@ function statusBadge(status) {
     outline_generated: 'Outline',
     in_progress: 'Writing...',
     completed: 'Completed',
+    reviewing: 'Reviewing...',
+    reviewed: 'Reviewed ✓',
     failed: 'Failed',
   };
   return `<span class="book-status status-${status}"><span class="status-dot"></span>${labels[status] || status}</span>`;
@@ -737,6 +1040,9 @@ function renderBooks(books) {
     const tags = (b.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('');
     const lengthLabel = {short_story:'Short Story',novella:'Novella',novel:'Novel',epic:'Epic'}[b.length] || b.length;
 
+    const isReview = b.status === 'reviewing';
+    const fillClass = isReview ? 'progress-bar-fill review' : 'progress-bar-fill';
+
     return `
       <div class="book-card" data-id="${b.id}" data-status="${b.status}" onclick="openBookDetail('${b.id}')">
         <div class="book-card-header">
@@ -751,7 +1057,7 @@ function renderBooks(books) {
         </div>
         <div class="progress-bar-container">
           <div class="progress-bar-bg">
-            <div class="progress-bar-fill" style="width: ${pct}%"></div>
+            <div class="${fillClass}" style="width: ${pct}%"></div>
           </div>
           <div class="progress-text">${step}: ${pct}%</div>
         </div>
@@ -765,6 +1071,102 @@ function escHtml(str) {
   if (!str) return '';
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ── Settings Panel ───────────────────────────────────────────────────
+let settingsVisible = false;
+let availableModels = [];
+
+function toggleSettings() {
+  settingsVisible = !settingsVisible;
+  const panel = document.getElementById('settingsPanel');
+  if (settingsVisible) {
+    panel.classList.add('active');
+    loadSettings();
+  } else {
+    panel.classList.remove('active');
+  }
+}
+
+async function loadSettings() {
+  try {
+    const config = await apiFetch('/config');
+    document.getElementById('settingsEndpoint').value = config.endpoint_url || '';
+    document.getElementById('settingsApiKey').value = config.api_key_set ? '••••••••' : '';
+    document.getElementById('currentModel').textContent = config.model_name || '—';
+    await refreshModels();
+  } catch (err) {
+    console.error('Failed to load settings:', err);
+  }
+}
+
+async function refreshModels() {
+  const select = document.getElementById('settingsModel');
+  select.innerHTML = '<option value="">Loading...</option>';
+
+  try {
+    const data = await apiFetch('/models');
+    availableModels = data.models || [];
+    const currentModel = data.current_model || '';
+
+    select.innerHTML = '';
+    if (availableModels.length === 0) {
+      select.innerHTML = '<option value="">No models available</option>';
+    } else {
+      availableModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        if (m.id === currentModel) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    document.getElementById('currentModel').textContent = currentModel || '—';
+  } catch (err) {
+    select.innerHTML = '<option value="">Failed to load</option>';
+    console.error('Failed to load models:', err);
+  }
+}
+
+async function saveSettings() {
+  const btn = document.getElementById('saveSettingsBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const endpoint = document.getElementById('settingsEndpoint').value.trim() || null;
+  const model = document.getElementById('settingsModel').value || null;
+  const apiKeyVal = document.getElementById('settingsApiKey').value.trim();
+  const apiKey = (apiKeyVal && !apiKeyVal.startsWith('•')) ? apiKeyVal : null;
+
+  try {
+    const result = await apiFetch('/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        endpoint_url: endpoint,
+        model_name: model,
+        api_key: apiKey,
+      }),
+    });
+
+    document.getElementById('currentModel').textContent = result.config.model_name || '—';
+    showToast('Settings saved successfully', 'success');
+  } catch (err) {
+    showToast('Failed to save settings: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Settings';
+  }
+}
+
+// Close settings when clicking outside
+document.addEventListener('click', (e) => {
+  if (settingsVisible &&
+      !e.target.closest('.settings-panel') &&
+      !e.target.closest('.settings-toggle')) {
+    settingsVisible = false;
+    document.getElementById('settingsPanel').classList.remove('active');
+  }
+});
 
 // ── Create Book ──────────────────────────────────────────────────────
 document.getElementById('createForm').addEventListener('submit', async (e) => {
@@ -855,11 +1257,13 @@ async function renderBookDetail(bookId) {
     </div>`;
 
     // Progress bar
-    if (book.status !== 'completed' && book.status !== 'failed') {
+    if (book.status !== 'reviewed' && book.status !== 'completed' && book.status !== 'failed') {
       const pct = book.progress?.percentage ?? 0;
+      const isReview = book.status === 'reviewing';
+      const fillClass = isReview ? 'progress-bar-fill review' : 'progress-bar-fill';
       html += `<div class="modal-section">
         <div class="progress-bar-bg" style="height:8px;">
-          <div class="progress-bar-fill" style="width:${pct}%"></div>
+          <div class="${fillClass}" style="width:${pct}%"></div>
         </div>
         <div class="progress-text">${book.progress?.chapters_completed ?? 0}/${book.progress?.total_chapters ?? 0} chapters — ${pct}%</div>
       </div>`;
@@ -899,6 +1303,48 @@ async function renderBookDetail(bookId) {
       </div>`;
     }
 
+    // Review section
+    if (book.review) {
+      const review = book.review;
+      const scoreClass = review.overall_score >= 7 ? 'high' : review.overall_score >= 4 ? 'medium' : 'low';
+      const verdictClass = review.verdict === 'ready' ? 'passed' : 'needs_revision';
+      const verdictLabel = review.verdict === 'ready' ? '✓ Passed Review' : '✗ Needs Revision';
+
+      html += `<div class="review-section">
+        <h3>📝 Professional Review</h3>
+        <div class="review-score">
+          <span class="score-value ${scoreClass}">${review.overall_score ?? '?'}/10</span>
+          <span class="score-label">Overall Score</span>
+        </div>
+        <span class="review-verdict ${verdictClass}">${verdictLabel}</span>
+      `;
+
+      // Show raw critique (collapsed)
+      if (review.critique) {
+        html += `<details style="margin-top:0.5rem;">
+          <summary style="cursor:pointer;font-size:0.8rem;color:var(--text-secondary);">View full critique</summary>
+          <div class="review-critique">${escHtml(review.critique)}</div>
+        </details>`;
+      }
+
+      // Show corrections
+      if (review.corrections && review.corrections.length > 0) {
+        html += `<div class="review-corrections">
+          <h4>Corrections Applied (${review.corrections.length})</h4>`;
+        review.corrections.forEach(c => {
+          html += `<div class="correction-item">
+            <span class="chapter-name">${escHtml(c.chapter)}</span>
+            <span class="issue-type"> — ${escHtml(c.issue_type)}</span>
+            <div class="issue-desc">${escHtml(c.issue_description)}</div>
+            ${c.corrected ? '<span class="corrected-badge">✓ Corrected</span>' : '<span style="color:var(--danger);font-size:0.68rem;">✗ Not corrected</span>'}
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`;
+    }
+
     // Chapters (show first chapter preview if in progress)
     if (book.chapters && Object.keys(book.chapters).length > 0) {
       const chapterKeys = Object.keys(book.chapters);
@@ -910,14 +1356,16 @@ async function renderBookDetail(bookId) {
       html += `<div class="modal-section">
         <h3>Chapters (${chapterKeys.length} generated)</h3>`;
 
-      if (book.status === 'completed') {
+      if (book.status === 'reviewed' || book.status === 'completed') {
         // Show all chapters as collapsible sections
         chapterKeys.forEach(key => {
           const content = book.chapters[key];
+          const summary = book.chapter_summaries?.[key] || '';
           html += `<details style="margin-bottom:0.8rem;">
             <summary style="cursor:pointer;font-weight:600;color:var(--text-primary);margin-bottom:0.3rem;">
               ${escHtml(key)}
             </summary>
+            ${summary ? `<p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem;font-style:italic;">${escHtml(summary)}</p>` : ''}
             <p class="content-text" style="margin-top:0.3rem;">${escHtml(content)}</p>
           </details>`;
         });
@@ -943,9 +1391,13 @@ async function renderBookDetail(bookId) {
     const actions = document.getElementById('modalActions');
     let actionsHtml = '';
 
-    if (book.status === 'completed') {
+    if (book.status === 'reviewed' || book.status === 'completed') {
       actionsHtml += `<a href="${API}/books/${bookId}/export/epub" class="btn btn-epub btn-sm">📥 Download EPUB</a>`;
       actionsHtml += `<a href="${API}/books/${bookId}/export/pdf" class="btn btn-pdf btn-sm">📥 Download PDF</a>`;
+    }
+
+    if (book.status === 'completed') {
+      actionsHtml += `<button class="btn btn-review btn-sm" onclick="triggerReview('${bookId}')">📝 Run Review</button>`;
     }
 
     if (book.status === 'failed') {
@@ -956,6 +1408,17 @@ async function renderBookDetail(bookId) {
 
   } catch (err) {
     document.getElementById('modalBody').innerHTML = `<p style="color:var(--danger);">Failed to load book details: ${escHtml(err.message)}</p>`;
+  }
+}
+
+// ── Trigger Review ───────────────────────────────────────────────────
+async function triggerReview(bookId) {
+  try {
+    showToast('Starting professional review...', 'info');
+    await apiFetch('/books/' + bookId + '/review', { method: 'POST' });
+    showToast('Review started — check back in a moment', 'info');
+  } catch (err) {
+    showToast('Failed to start review: ' + err.message, 'error');
   }
 }
 
@@ -987,17 +1450,21 @@ function startPolling(bookId) {
         const step = book.progress?.current_step ?? book.status;
         const chapters = book.progress?.chapters_completed ?? 0;
         const total = book.progress?.total_chapters ?? 0;
+        const isReview = book.status === 'reviewing';
 
         const badge = card.querySelector('.book-status');
         if (badge) {
           badge.className = `book-status status-${book.status}`;
-          const labels = {pending:'Queued',summary_generated:'Summary',outline_generated:'Outline',in_progress:'Writing...',completed:'Completed',failed:'Failed'};
+          const labels = {pending:'Queued',summary_generated:'Summary',outline_generated:'Outline',in_progress:'Writing...',completed:'Completed',reviewing:'Reviewing...',reviewed:'Reviewed ✓',failed:'Failed'};
           badge.innerHTML = `<span class="status-dot"></span>${labels[book.status] || book.status}`;
         }
         const dot = card.querySelector('.status-dot');
         if (dot) dot.className = 'status-dot';
         const progressFill = card.querySelector('.progress-bar-fill');
-        if (progressFill) progressFill.style.width = pct + '%';
+        if (progressFill) {
+          progressFill.style.width = pct + '%';
+          if (isReview) progressFill.classList.add('review');
+        }
         const progressText = card.querySelector('.progress-text');
         if (progressText) progressText.textContent = `${step}: ${pct}%`;
         const metaSpan = card.querySelector('.book-meta span:last-child');
@@ -1009,10 +1476,12 @@ function startPolling(bookId) {
         await renderBookDetail(bookId);
       }
 
-      // Stop polling if completed or failed
-      if (book.status === 'completed' || book.status === 'failed') {
+      // Stop polling if completed, reviewed or failed
+      if (book.status === 'reviewed' || book.status === 'completed' || book.status === 'failed') {
         stopPolling();
-        if (book.status === 'completed') {
+        if (book.status === 'reviewed') {
+          showToast(`"${book.title}" reviewed and ready!`, 'success');
+        } else if (book.status === 'completed') {
           showToast(`"${book.title}" is ready!`, 'success');
         } else {
           showToast(`"${book.title}" generation failed`, 'error');
@@ -1057,7 +1526,13 @@ async function retryBook(bookId) {
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Escape') {
+    closeModal();
+    if (settingsVisible) {
+      settingsVisible = false;
+      document.getElementById('settingsPanel').classList.remove('active');
+    }
+  }
 });
 
 // ── Initial Load ─────────────────────────────────────────────────────
