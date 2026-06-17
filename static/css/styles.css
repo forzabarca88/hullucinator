@@ -299,6 +299,30 @@ select { cursor: pointer; appearance: auto; }
   overflow-x: auto;
 }
 
+/* ── Detail Settings Section ──────────────────────────────────── */
+.detail-settings {
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+.detail-setting {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+}
+.detail-label {
+  font-size: .72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-weight: 600;
+}
+.detail-value {
+  color: var(--text);
+  font-size: .9rem;
+  line-height: 1.5;
+}
+
 /* ── Review Section ───────────────────────────────────────────── */
 .review-section {
   background: var(--surface2);

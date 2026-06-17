@@ -54,7 +54,7 @@ class BookCreateRequest(BaseModel):
 
 
 class AIConfig(BaseModel):
-    """Persisted AI configuration (saved to data/config.json, no API keys)."""
+    """Persisted AI configuration (saved to ~/.hullucinator_data/data/config.json, no API keys)."""
     endpoint_url: str = ""
     model_name: str = ""
     reviewer_endpoint_url: str = ""

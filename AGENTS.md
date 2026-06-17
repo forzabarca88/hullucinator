@@ -21,9 +21,9 @@ POST /api/books/create → (background) generate_summary → generate_outline �
 
 | Module | Responsibility | Key Details |
 |--------|---------------|-------------|
-| `app/main.py` | FastAPI app & HTTP endpoints | Defines all API + web UI endpoints. Creates `AIClient`, optional `ReviewerClient`, and `Orchestrator` as module-level singletons. Configured via environment variables. **Config persistence** — loads from `data/config.json` on startup, saves on changes (no API keys). Background task support via `asyncio.create_task()`. Serves static web UI. AI config endpoints (`GET/POST /api/config`, `GET /api/models`). Review trigger (`POST /api/books/{id}/review`). Writer + reviewer config in one endpoint. |
+| `app/main.py` | FastAPI app & HTTP endpoints | Defines all API + web UI endpoints. Creates `AIClient`, optional `ReviewerClient`, and `Orchestrator` as module-level singletons. Configured via environment variables. **Config persistence** — loads from `~/.hullucinator_data/data/config.json` on startup, saves on changes (no API keys). Background task support via `asyncio.create_task()`. Serves static web UI. AI config endpoints (`GET/POST /api/config`, `GET /api/models`). Review trigger (`POST /api/books/{id}/review`). Writer + reviewer config in one endpoint. |
 | `app/schemas.py` | Data models | `BookState` Pydantic model: `id`, `title`, `prompt`, `tags` (List[str]), `length` (str), `status`, `summary`, `outline`, `chapters`, `chapter_summaries` (Dict[str,str]), `metadata`, `review` (Dict — latest turn result), `review_history` (List[Dict] — full audit trail), `review_max_turns` (int, default 2), `progress` (Dict). `BookCreateRequest` for API input includes `review_max_turns`. `AIConfig` for persisted config: `endpoint_url`, `model_name`, `reviewer_endpoint_url`, `reviewer_model_name`, `review_max_turns`. |
-| `app/storage.py` | Persistence | JSON files in `data/books/`. Uses **absolute path** from project root. `list_books()` returns all books sorted by modification time. `EXPORTS_DIR` shared with exporter. **Config persistence** — `save_config()` and `load_config()` read/write `data/config.json` (endpoint URLs, model names, review settings). API keys are **never persisted** for security. |
+| `app/storage.py` | Persistence | JSON files in `~/.hullucinator_data/data/books/`. Uses the user's home directory (`Path.home()`) for cross-platform compatibility. `list_books()` returns all books sorted by modification time. `EXPORTS_DIR` shared with exporter. **Config persistence** — `save_config()` and `load_config()` read/write `~/.hullucinator_data/data/config.json` (endpoint URLs, model names, review settings). API keys are **never persisted** for security. |
 | `app/ai_client.py` | LLM API client | Talks to OpenAI-compatible `/v1/chat/completions`. Retries 2x on 429/500/503 or empty responses. Uses **persistent** `httpx.AsyncClient`. Uses **async** `await asyncio.sleep()`. Runtime-reconfigurable endpoint, model, and API key via properties. `list_models()` fetches available models from `/v1/models`. **`ReviewerClient`** — dedicated client for review/correction tasks, can use different endpoint/model than main `AIClient` while sharing the same HTTP connection and auth headers. |
 | `app/orchestrator.py` | Pipeline coordinator | 5 async methods (`generate_summary`, `generate_outline`, `generate_chapters`, `review_book`, `validate_book`). Each step saves state to disk. **Enforced status transitions** prevent data inconsistencies. Progress tracking updated at each step. Improved outline parser. **Tags and length** guide LLM prompts throughout the pipeline. **Chapter continuity** — each chapter receives cumulative context via condensed chapter summaries. **Iterative review loop** — `review_book()` runs critique → correct → re-critique until approved or `review_max_turns` reached. Uses separate `reviewer_client` if configured. Full audit trail in `book_state.review_history`. Fuzzy chapter title matching for issue-to-chapter mapping. |
 | `app/exporter.py` | EPUB/PDF export | EPUB: full CSS styling, markdown→HTML conversion, TOC, drop caps, **genre tags as EPUB subjects**. PDF: plain text with configurable font paths (env var `PDF_FONT_DIR`), fallback to Helvetica, **tags on title page**. Uses absolute `EXPORTS_DIR` from storage. **New: review metadata** included in exports (score, verdict, corrections on title page). |
@@ -49,7 +49,7 @@ All configuration is via environment variables (see `.env.example`):
 | `PDF_FONT_DIR` | `/usr/share/fonts/truetype/dejavu` | PDF font directory |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
-**Config Persistence:** AI settings (endpoint URLs, model names, max review turns) are persisted to `data/config.json` and loaded on server startup. This survives restarts. **API keys are never persisted** — they must come from environment variables or runtime updates via the GUI/API.
+**Config Persistence:** AI settings (endpoint URLs, model names, max review turns) are persisted to `~/.hullucinator_data/data/config.json` and loaded on server startup. This survives restarts. **API keys are never persisted** — they must come from environment variables or runtime updates via the GUI/API.
 
 **Runtime Configuration:** AI settings can be changed at runtime via the GUI Settings panel or the `/api/config` endpoint. Changes take effect immediately for all subsequent generation tasks.
 
@@ -70,7 +70,7 @@ The following issues from the original codebase have been fixed:
 11. ✅ **No Chapter Continuity** — Each chapter now receives cumulative context via condensed summaries of prior chapters
 12. ✅ **No Quality Review** — Post-completion professional critic review with automatic corrections
 13. ✅ **No Model Discovery** — GUI fetches available models from the LLM provider
-14. ✅ **No Config Persistence** — AI settings saved to `data/config.json` on changes, loaded on startup. API keys never persisted.
+14. ✅ **No Config Persistence** — AI settings saved to `~/.hullucinator_data/data/config.json` on changes, loaded on startup. API keys never persisted.
 15. ✅ **No Separate Reviewer Config** — Optional `REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME` env vars + GUI settings. ReviewerClient shares HTTP connection but uses different endpoint/model.
 16. ✅ **No Iterative Review Loop** — `review_book()` runs critique → correct → re-critique until approved or `review_max_turns` reached. Full per-turn audit trail in `review_history`.
 17. ✅ **Create Form Max Turns Not Synced** — Create form's `maxTurns` select now syncs with persisted config on page load and after config save, so the default matches the user's saved preference.
@@ -90,7 +90,7 @@ Priority areas for testing:
 The API has no rate limiting. For production deployments, consider adding `slowapi` or similar.
 
 ### 3. Export Cleanup
-Exported files in `exports/` accumulate without cleanup. Consider a configurable retention policy or periodic cleanup.
+Exported files in `~/.hullucinator_data/exports/` accumulate without cleanup. Consider a configurable retention policy or periodic cleanup.
 
 ### 4. Concurrency Limits
 No limit on concurrent background tasks. For high-traffic deployments, consider a task queue (Celery, RQ) with worker limits.
@@ -106,8 +106,8 @@ The review step sends the entire book to the LLM, which can be expensive for lon
 - **Status values:** `pending`, `summary_generated`, `outline_generated`, `in_progress`, `completed`, `reviewing`, `reviewed`, `failed`
 - **Status transitions:** Enforced via `_transition()` — see `VALID_TRANSITIONS` dict in orchestrator
 - **Book IDs:** UUID4 strings (generated at creation time)
-- **Storage format:** One JSON file per book in `data/books/`, named `{id}.json`
-- **Export format:** EPUB and PDF files written to `exports/` directory, named `{book_id}.{ext}`
+- **Storage format:** One JSON file per book in `~/.hullucinator_data/data/books/`, named `{id}.json`
+- **Export format:** EPUB and PDF files written to `~/.hullucinator_data/exports/` directory, named `{book_id}.{ext}`
 - **Chapter storage:** Dict mapping chapter title (string) → chapter content (string)
 - **Chapter summaries:** Dict mapping chapter title (string) → one-paragraph summary (string). Generated after each chapter for continuity context.
 - **Progress tracking:** `progress` dict with `current_step`, `total_chapters`, `chapters_completed`, `percentage`
@@ -117,7 +117,7 @@ The review step sends the entire book to the LLM, which can be expensive for lon
 - **Book length:** One of `short_story`, `novella`, `novel`, `epic`. Controls chapter count (`LENGTH_CHAPTER_COUNT`) and word count (`LENGTH_WORD_COUNT`) in orchestrator prompts. Default: `novel` (8–15 chapters, 20,000–50,000 words).
 - **Review audit:** `BookState.review` dict (latest turn result) with `turn` (int), `critique` (raw LLM response), `issues` (list of identified problems), `overall_score` (0-10), `verdict` (`needs_revision` | `ready`), `corrections` (list of applied fixes), `reviewed` (bool). `BookState.review_history` — list of all turn dicts providing full iteration audit trail. `BookState.review_max_turns` — maximum critique→correct iterations (default 2, settable per-book).
 - **Reviewer config:** Optional separate endpoint/model for review tasks. Configured via `REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME` env vars, GUI settings panel, or `POST /api/config`. Empty values mean reviewer uses the same endpoint/model as the writer.
-- **Config persistence:** `data/config.json` stores `endpoint_url`, `model_name`, `reviewer_endpoint_url`, `reviewer_model_name`, `review_max_turns`. Loaded on startup, saved on config changes. API keys are **never persisted**.
+- **Config persistence:** `~/.hullucinator_data/data/config.json` stores `endpoint_url`, `model_name`, `reviewer_endpoint_url`, `reviewer_model_name`, `review_max_turns`. Loaded on startup, saved on config changes. API keys are **never persisted**.
 
 ## Chapter Continuity Design
 
