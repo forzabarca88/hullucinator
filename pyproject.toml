@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hullucinator"
-version = "1.0.0"
+version = "1.2.0"
 description = "AI-Powered E-Book Generator — generates complete e-books from a simple prompt"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -18,6 +18,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "ebooklib>=0.18",
     "fpdf2>=2.0.0",
+    "markdown>=3.4",
 ]
 
 [project.optional-dependencies]
@@ -30,11 +31,13 @@ dev = [
 [project.scripts]
 hullucinator = "app.main:main"
 
+# (M9 fix: removed "static*" from packages since static/ is not a Python package.
+# Static files are included as package data under "app" instead.)
 [tool.setuptools.packages.find]
-include = ["app*", "static*"]
+include = ["app*"]
 
 [tool.setuptools.package-data]
-static = ["*.html", "*.css", "*.js"]
+app = ["static/**/*"]
 
 [tool.ruff]
 line-length = 120

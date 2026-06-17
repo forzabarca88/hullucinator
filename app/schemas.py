@@ -10,8 +10,8 @@ from typing import List, Dict, Optional, Any
 
 class BookState(BaseModel):
     id: str
-    title: str
-    prompt: str
+    title: str = Field(..., max_length=200)
+    prompt: str = Field(..., max_length=5000)
     tags: list[str] = []
     length: str = "novel"  # short_story | novella | novel | epic
     status: str  # pending | summary_generated | outline_generated | in_progress | completed | reviewing | reviewed | failed
@@ -29,7 +29,9 @@ class BookState(BaseModel):
     review: Optional[Dict[str, Any]] = None
     review_history: Optional[List[Dict[str, Any]]] = None
     # Maximum number of review-correction turns before giving up (default 2)
-    review_max_turns: int = 2
+    review_max_turns: int = Field(default=2, ge=1, le=10)
+    # Skip the review step entirely (H3: allows quick drafts without review)
+    skip_review: bool = False
 
     # Progress tracking for the web interface
     progress: Dict[str, Any] = Field(default_factory=lambda: {
@@ -41,12 +43,14 @@ class BookState(BaseModel):
 
 
 class BookCreateRequest(BaseModel):
-    title: str
-    prompt: str
+    title: str = Field(..., max_length=200)
+    prompt: str = Field(..., max_length=5000)
     tags: list[str] = []
     length: str = "novel"
     # Maximum review-correction turns (overrides global default)
-    review_max_turns: int = 2
+    review_max_turns: int = Field(default=2, ge=1, le=10)
+    # Skip the review step entirely (H3: allows quick drafts without review)
+    skip_review: bool = False
 
 
 class AIConfig(BaseModel):
@@ -55,4 +59,4 @@ class AIConfig(BaseModel):
     model_name: str = ""
     reviewer_endpoint_url: str = ""
     reviewer_model_name: str = ""
-    review_max_turns: int = 2
+    review_max_turns: int = Field(default=2, ge=1, le=10)

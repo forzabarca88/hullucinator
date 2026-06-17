@@ -19,9 +19,13 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dataclasses import dataclass, field
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
 from app.schemas import BookState, BookCreateRequest, AIConfig
@@ -39,6 +43,17 @@ logger = logging.getLogger(__name__)
 # ── Network bind (only env vars that affect the server itself, not AI) ──
 HOST = os.environ.get("HULLUCINATOR_HOST", "0.0.0.0")
 PORT = int(os.environ.get("HULLUCINATOR_PORT", "8000"))
+
+# ── Server configuration object (replaces fragile global variables) ──
+
+@dataclass
+class ServerConfig:
+    """Mutable server configuration, replacing module-level global variables."""
+    configured: bool = False
+    reviewer_client: "ReviewerClient | None" = None
+    persisted: "AIConfig | None" = None
+    max_concurrent_tasks: int = 5
+
 
 # ── Load persisted config (the ONLY source of AI configuration) ─────────
 # No env var defaults. User must configure via the GUI first.
@@ -75,24 +90,38 @@ if _persisted and (_persisted.reviewer_endpoint_url or _persisted.reviewer_model
 
 orchestrator = Orchestrator(ai_client, reviewer_client=reviewer_client)
 
+# ── Server config (replaces global configured, reviewer_client, _persisted) ──
+server_config = ServerConfig(
+    configured=configured,
+    reviewer_client=reviewer_client,
+    persisted=_persisted,
+)
+
 # ── Background task registry ────────────────────────────────────────────
 
 # Map of book_id → asyncio.Task for in-progress generations
 _active_tasks: dict[str, "asyncio.Task"] = {}
 
+# Concurrency limiter: controls how many books can be generated simultaneously
+MAX_CONCURRENT_GENERATIONS = int(os.environ.get("HULLUCINATOR_MAX_CONCURRENT", "5"))
+_generation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+
 
 def _check_configured():
     """Raise 400 if AI is not configured (checks live client state)."""
     if not ai_client.endpoint_url or not ai_client.model_name:
+        server_config.configured = False
         raise HTTPException(
             status_code=400,
             detail="AI is not configured. Please set your endpoint URL, model, and API key in Settings first.",
         )
+    server_config.configured = True
 
 
-def _check_endpoint():
+def _check_endpoint(endpoint_url: str | None = None):
     """Raise 400 if no endpoint URL is set. Used for model listing during setup."""
-    if not ai_client.endpoint_url:
+    check_url = endpoint_url if endpoint_url is not None else ai_client.endpoint_url
+    if not check_url:
         raise HTTPException(
             status_code=400,
             detail="Endpoint URL is required. Set it in Settings first.",
@@ -103,7 +132,8 @@ async def _run_generation_pipeline(book_id: str):
     """
     Run the full book generation pipeline as a background task.
     Updates book state on disk at each step for progress polling.
-    After chapters are complete, runs the iterative review step automatically.
+    After chapters are complete, runs the iterative review step (unless skipped).
+    Uses a semaphore to limit concurrent generations.
     """
     book_state = load_book(book_id)
     if not book_state:
@@ -114,9 +144,13 @@ async def _run_generation_pipeline(book_id: str):
         await orchestrator.generate_summary(book_state)
         await orchestrator.generate_outline(book_state)
         await orchestrator.generate_chapters(book_state)
-        # Auto-trigger iterative review after chapters are complete
-        await orchestrator.review_book(book_state, max_turns=book_state.review_max_turns)
-        logger.info("Book '%s' (%s) generation + review completed", book_state.title, book_id)
+
+        # Auto-trigger iterative review after chapters are complete (unless skipped)
+        if not book_state.skip_review:
+            await orchestrator.review_book(book_state, max_turns=book_state.review_max_turns)
+            logger.info("Book '%s' (%s) generation + review completed", book_state.title, book_id)
+        else:
+            logger.info("Book '%s' (%s) generation completed (review skipped)", book_state.title, book_id)
 
     except Exception as e:
         logger.error("Book '%s' (%s) generation failed: %s", book_state.title, book_id, e)
@@ -180,6 +214,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── CORS Middleware (H2) ─────────────────────────────────────────────────
+# Allows the web UI to work when served from a different origin
+# (e.g., behind a reverse proxy, CDN, or separate frontend deployment)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Security Headers (L4) ───────────────────────────────────────────────
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add Content Security Policy and other security headers."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self';"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # ── Static file resolution ──────────────────────────────────────────────
 # Works both from source tree and from installed package (uv pip install .)
 def _resolve_static_dir() -> Path:
@@ -187,10 +254,11 @@ def _resolve_static_dir() -> Path:
     source_static = Path(__file__).resolve().parent.parent / "static"
     if (source_static / "index.html").exists():
         return source_static
-    # 2. Try installed package via importlib.resources
+    # 2. Try installed package via importlib.resources (M1 fix)
+    #    Use "app" package since "static" is package data under app, not its own package
     try:
         from importlib import resources
-        pkg = resources.files("static")
+        pkg = resources.files("app") / "static"
         if (pkg / "index.html").is_file():
             return pkg
     except (ImportError, OSError):
@@ -216,81 +284,18 @@ async def web_index():
     return HTMLResponse(content=_MINIMAL_INDEX, status_code=200)
 
 
-# Minimal fallback when static files are unavailable
+# Minimal fallback when static files are unavailable (L3: reduced to essential message)
 _MINIMAL_INDEX = """\
 <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hullucinator</title>
 <style>body{font-family:system-ui,sans-serif;background:#0f0f1a;color:#eaeaea;
-margin:0;padding:2rem;text-align:center}.box{max-width:480px;margin:auto;
-background:#16213e;border:1px solid rgba(255,255,255,.08);border-radius:12px;
-padding:2rem;text-align:left}h1{color:#e94560;font-size:2rem;margin:0 0 .5rem}
-label{display:block;font-size:.8rem;color:#a0a0b8;margin:.5rem 0 .2rem;
-text-transform:uppercase}input,textarea{width:100%;padding:.7rem;
-background:#1a1a2e;border:1px solid rgba(255,255,255,.08);border-radius:8px;
-color:#eaeaea;font-size:.95rem;margin-bottom:.5rem}textarea{min-height:100px;
-resize:vertical}button{background:#e94560;color:#fff;border:none;padding:.8rem
-1.5rem;border-radius:8px;font-weight:600;cursor:pointer;font-size:.95rem}
-button:hover{background:#ff6b81}button:disabled{opacity:.5;cursor:not-allowed}
-.books{margin-top:2rem}.book{background:#16213e;border:1px solid
-rgba(255,255,255,.08);border-radius:8px;padding:1rem;margin-bottom:.5rem;
-cursor:pointer}.book:hover{border-color:#e94560}.status{display:inline-block;
-padding:.2rem .6rem;border-radius:12px;font-size:.7rem;font-weight:600;
-text-transform:uppercase}.s-completed{background:rgba(46,204,113,.15);color:#2ecc71}
-.s-failed{background:rgba(231,76,60,.15);color:#e74c3c}.s-in_progress{
-background:rgba(243,156,18,.15);color:#f39c12}.s-pending{
-background:rgba(52,152,219,.15);color:#3498db}.toast{position:fixed;top:1rem;
-right:1rem;background:#16213e;border:1px solid rgba(255,255,255,.08);
-padding:.8rem 1.2rem;border-radius:8px;font-size:.9rem;z-index:999;
-animation:fade .3s}@keyframes fade{from{opacity:0;transform:translateX(100%)}
-to{opacity:1;transform:translateX(0)}}a{color:#3498db}</style>
-</head><body><h1>Hullucinator</h1><p style="color:#a0a0b8;margin-bottom:2rem">
-AI-Powered E-Book Generator</p>
-<div class="box"><form id="createForm"><label>Book Title</label>
-<input id="title" placeholder="The Martian Garden" required>
-<label>Prompt</label><textarea id="prompt" placeholder="Describe your book..."
-required></textarea><button type="submit" id="createBtn">Generate Book</button>
-</form></div><div class="books" id="booksList"></div>
-<script>
-const API='/api';async function apiFetch(p,o={}){const r=await fetch(API+p,{
-headers:{'Content-Type':'application/json'},...o});if(!r.ok){const e=await r.json()
-.catch(()=>({detail:r.statusText}));throw new Error(e.detail||r.statusText)}
-return r.json()}
-function toast(m){const t=document.createElement('div');t.className='toast';
-t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
-function statusBadge(s){const c={completed:'s-completed',failed:'s-failed',
-in_progress:'s-in_progress',pending:'s-pending',summary_generated:'s-pending',
-outline_generated:'s-in_progress'};return`<span class="status ${c[s]||''}">${s}</span>`}
-async function loadBooks(){try{const books=await apiFetch('/books');
-const list=document.getElementById('booksList');if(!books.length){
-list.innerHTML='<p style="color:#6c6c80;text-align:center">No books yet.</p>';return}
-list.innerHTML=books.map(b=>`<div class="book" onclick="openDetail('${b.id}')">
-<strong>${b.title}</strong> ${statusBadge(b.status)}<br><small style="color:#a0a0b8">
-${b.prompt}</small></div>`).join('')}catch(e){console.error(e)}}
-async function openDetail(id){try{const b=await apiFetch('/books/'+id);
-let h=`<h2>${b.title}</h2>${statusBadge(b.status)}<br><br>`;
-if(b.summary)h+=`<h3>Summary</h3><p>${b.summary}</p>`;
-if(b.outline)h+=`<h3>Outline</h3><ol>`+b.outline.map(c=>`<li>${c}</li>`).join('')+
-`</ol>`;if(b.chapters)for(const[t,c]of Object.entries(b.chapters))
-h+=`<details><summary>${t}</summary><pre>${c}</pre></details>`;
-if(b.status==='completed')h+=`<br><a href="${API}/books/${id}/export/epub">Download EPUB</a>
- | <a href="${API}/books/${id}/export/pdf">Download PDF</a>`;
-if(b.status==='failed'&&b.metadata?.error)h+=`<p style="color:#e74c3c">Error: ${b.metadata.error}</p>`;
-if(b.status!=='completed'&&b.status!=='failed'){
-const p=b.progress||{};h+=`<p>Progress: ${p.current_step||b.status} (${p.percentage||0}%)</p>`}
-alert(h);if(b.status==='completed'||b.status==='failed')loadBooks()
-}catch(e){toast('Error: '+e.message)}}
-document.getElementById('createForm').addEventListener('submit',async e=>{
-e.preventDefault();const btn=document.getElementById('createBtn');
-btn.disabled=true;btn.textContent='Creating...';
-try{await apiFetch('/books/create',{method:'POST',body:JSON.stringify({
-title:document.getElementById('title').value,prompt:document.getElementById('prompt')
-.value})});document.getElementById('title').value='';
-document.getElementById('prompt').value='';toast('Book queued!');loadBooks()
-}catch(e){toast('Error: '+e.message)}finally{btn.disabled=false;
-btn.textContent='Generate Book'}});
-loadBooks();setInterval(loadBooks,10000);
-</script></body></html>"""
+margin:0;padding:2rem;text-align:center}h1{color:#e94560;font-size:2rem;margin:0 0 .5rem}
+p{color:#a0a0b8}</style>
+</head><body><h1>Hullucinator</h1>
+<p>Static files not found. Please ensure the <code>static/</code> directory is available.</p>
+<p style="font-size:.8rem;margin-top:2rem;color:#6c6c80">
+AI-Powered E-Book Generator</p></body></html>"""
 
 
 
@@ -299,7 +304,7 @@ loadBooks();setInterval(loadBooks,10000);
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "hullucinator", "configured": configured}
+    return {"status": "healthy", "service": "hullucinator", "configured": server_config.configured}
 
 
 # ── AI Configuration Endpoints ──────────────────────────────────────────
@@ -307,23 +312,22 @@ async def health_check():
 @app.get("/api/config")
 async def get_ai_config():
     """Get current AI configuration (including reviewer settings)."""
-    global configured
-
     reviewer_ep = ""
     reviewer_model = ""
-    if reviewer_client:
-        rconf = reviewer_client.get_config()
+    rc = server_config.reviewer_client
+    if rc:
+        rconf = rc.get_config()
         reviewer_ep = rconf.get("endpoint_url", "")
         reviewer_model = rconf.get("model_name", "")
 
     # Use persisted review_max_turns, or fall back to global default
-    default_turns = _persisted.review_max_turns if _persisted else 2
+    default_turns = server_config.persisted.review_max_turns if server_config.persisted else 2
 
     # Re-evaluate configured status from live client state
-    configured = bool(ai_client.endpoint_url and ai_client.model_name)
+    server_config.configured = bool(ai_client.endpoint_url and ai_client.model_name)
 
     return AIConfigResponse(
-        configured=configured,
+        configured=server_config.configured,
         endpoint_url=ai_client.endpoint_url,
         model_name=ai_client.model_name,
         api_key_set=ai_client.api_key is not None and ai_client.api_key != "",
@@ -339,8 +343,6 @@ async def update_ai_config(config: AIConfigUpdate):
     Update AI configuration at runtime. Changes take effect immediately
     for all subsequent tasks. Persisted to data/config.json (no API keys).
     """
-    global configured, reviewer_client, _persisted
-
     # Update writer client
     await ai_client.update_config(
         endpoint_url=config.endpoint_url,
@@ -348,39 +350,47 @@ async def update_ai_config(config: AIConfigUpdate):
         api_key=config.api_key,
     )
 
-    # Update reviewer client
-    if config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None:
-        if reviewer_client is None:
+    # Update reviewer client — empty string means "clear this field"
+    if config.reviewer_endpoint_url == "" or config.reviewer_model_name == "":
+        # User explicitly cleared reviewer config
+        if server_config.reviewer_client:
+            if config.reviewer_endpoint_url == "":
+                server_config.reviewer_client.endpoint_url = ""
+            if config.reviewer_model_name == "":
+                server_config.reviewer_client.model_name = ""
+    elif config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None:
+        if server_config.reviewer_client is None:
             # Create one if it doesn't exist yet
             endpoint = config.reviewer_endpoint_url or ai_client.endpoint_url
             model = config.reviewer_model_name or ai_client.model_name
             if endpoint or model:
-                reviewer_client = ReviewerClient(ai_client, endpoint_url=endpoint, model_name=model)
-                orchestrator.reviewer_client = reviewer_client
+                server_config.reviewer_client = ReviewerClient(ai_client, endpoint_url=endpoint, model_name=model)
+                orchestrator.reviewer_client = server_config.reviewer_client
                 logger.info("Created reviewer client: endpoint=%s, model=%s", endpoint, model)
         else:
-            await reviewer_client.update_config(
+            await server_config.reviewer_client.update_config(
                 endpoint_url=config.reviewer_endpoint_url,
                 model_name=config.reviewer_model_name,
             )
 
     # Persist config (without API key)
+    rc = server_config.reviewer_client
     persisted = AIConfig(
         endpoint_url=config.endpoint_url or ai_client.endpoint_url,
         model_name=config.model_name or ai_client.model_name,
-        reviewer_endpoint_url=config.reviewer_endpoint_url or (reviewer_client.endpoint_url if reviewer_client else ""),
-        reviewer_model_name=config.reviewer_model_name or (reviewer_client.model_name if reviewer_client else ""),
+        reviewer_endpoint_url=config.reviewer_endpoint_url or (rc.endpoint_url if rc else ""),
+        reviewer_model_name=config.reviewer_model_name or (rc.model_name if rc else ""),
         review_max_turns=config.review_max_turns if config.review_max_turns is not None else 2,
     )
     save_config(persisted)
     logger.info("Config saved to disk: endpoint=%s, model=%s",
                 persisted.endpoint_url, persisted.model_name)
 
-    # Update module-level persisted config so get_ai_config returns fresh values
-    _persisted = persisted
+    # Update server_config so get_ai_config returns fresh values
+    server_config.persisted = persisted
 
     # Re-evaluate configured status
-    configured = bool(ai_client.endpoint_url and ai_client.model_name)
+    server_config.configured = bool(ai_client.endpoint_url and ai_client.model_name)
 
     return {"status": "ok", "config": await get_ai_config()}
 
@@ -394,22 +404,25 @@ async def list_available_models(
     List available models from the LLM provider.
     Accepts optional endpoint_url/api_key query params for setup wizard
     fetching before config is saved.
+
+    Uses a temporary client to avoid mutating the shared ai_client state
+    (fixes race condition with concurrent requests).
     """
-    # Allow setup wizard to pass endpoint directly
-    prev_endpoint = ai_client.endpoint_url
-    prev_api_key = ai_client.api_key
-    if endpoint_url:
-        ai_client.endpoint_url = endpoint_url
-    if api_key:
-        ai_client.api_key = api_key
-    _check_endpoint()
+    effective_endpoint = endpoint_url or ai_client.endpoint_url
+    effective_api_key = api_key or ai_client.api_key
+    _check_endpoint(effective_endpoint)
+
+    # Build a temporary client for this request — doesn't mutate shared state
+    temp_client = AIClient(
+        endpoint_url=effective_endpoint,
+        model_name=ai_client.model_name,
+        api_key=effective_api_key,
+    )
     try:
-        models = await ai_client.list_models()
+        models = await temp_client.list_models()
         return {"models": models, "current_model": ai_client.model_name}
     finally:
-        # Restore original values after fetch
-        ai_client.endpoint_url = prev_endpoint
-        ai_client.api_key = prev_api_key
+        await temp_client.close()
 
 
 @app.get("/api/reviewer/models")
@@ -479,6 +492,7 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
     Create a new book and start generation in the background.
 
     Returns the book_id immediately so the client can poll for progress.
+    Generation is rate-limited by a semaphore to prevent resource exhaustion.
     """
     _check_configured()
 
@@ -491,19 +505,24 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
         length=request.length,
         status="pending",
         review_max_turns=request.review_max_turns,
+        skip_review=request.skip_review,
         progress={"current_step": "pending", "total_chapters": 0, "chapters_completed": 0, "percentage": 0},
     )
 
     # Save initial state
     save_book(book_id, book_state)
 
-    # Start generation as a background task
-    task = asyncio.create_task(_run_generation_pipeline(book_id))
+    # Start generation as a background task (with concurrency limit)
+    async def _semaphore_task():
+        async with _generation_semaphore:
+            await _run_generation_pipeline(book_id)
+
+    task = asyncio.create_task(_semaphore_task())
     _active_tasks[book_id] = task
 
-    logger.info("Book '%s' (%s) queued for generation (max_review_turns=%d)",
-                request.title, book_id, request.review_max_turns)
-    return {"book_id": book_id, "status": "pending", "review_max_turns": request.review_max_turns}
+    logger.info("Book '%s' (%s) queued for generation (max_review_turns=%d, skip_review=%s)",
+                request.title, book_id, request.review_max_turns, request.skip_review)
+    return {"book_id": book_id, "status": "pending", "review_max_turns": request.review_max_turns, "skip_review": request.skip_review}
 
 
 @app.get("/api/books")
@@ -521,6 +540,7 @@ async def list_all_books():
             "tags": b.tags,
             "length": b.length,
             "review_max_turns": b.review_max_turns,
+            "skip_review": b.skip_review,
             "review": b.review,
             "review_history": b.review_history,
         }
@@ -567,22 +587,23 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
         )
 
     async def _run_review():
-        try:
-            # Reload to get latest state
-            book = load_book(book_id)
-            if not book:
-                return
-            await orchestrator.review_book(book, max_turns=book.review_max_turns)
-            logger.info("Iterative review completed for '%s' (%s)", book.title, book_id)
-        except Exception as e:
-            logger.error("Review failed for book %s: %s", book_id, e)
-            book = load_book(book_id)
-            if book:
-                book.status = "failed"
-                book.metadata = {"error": str(e)}
-                book.progress["current_step"] = "review_failed"
-                book.progress["error"] = str(e)
-                save_book(book_id, book)
+        async with _generation_semaphore:
+            try:
+                # Reload to get latest state
+                book = load_book(book_id)
+                if not book:
+                    return
+                await orchestrator.review_book(book, max_turns=book.review_max_turns)
+                logger.info("Iterative review completed for '%s' (%s)", book.title, book_id)
+            except Exception as e:
+                logger.error("Review failed for book %s: %s", book_id, e)
+                book = load_book(book_id)
+                if book:
+                    book.status = "failed"
+                    book.metadata = {"error": str(e)}
+                    book.progress["current_step"] = "review_failed"
+                    book.progress["error"] = str(e)
+                    save_book(book_id, book)
 
     task = asyncio.create_task(_run_review())
     _active_tasks[book_id] = task
