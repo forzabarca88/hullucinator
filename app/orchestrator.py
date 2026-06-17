@@ -18,7 +18,7 @@ import json
 from typing import List, Optional
 
 from app.ai_client import AIClient, ReviewerClient
-from app.storage import save_book
+from app.storage import save_book, load_config
 from app.schemas import BookState
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,10 @@ LENGTH_WORD_COUNT: dict[str, str] = {
     "epic": "50,000+",
 }
 
+# Review thresholds — switch to chunked review for long books
+REVIEW_WORD_THRESHOLD = 30_000  # words before chunked review is used
+REVIEW_CHUNK_SIZE = 5  # chapters per review chunk
+
 
 def _transition(book_state: BookState, new_status: str):
     """
@@ -77,6 +81,13 @@ class Orchestrator:
     def _get_reviewer(self) -> AIClient | ReviewerClient:
         """Return the client to use for review tasks."""
         return self.reviewer_client if self.reviewer_client else self.ai_client
+
+    def _get_review_thresholds(self):
+        """Get review thresholds from persisted config, falling back to defaults."""
+        persisted = load_config()
+        if persisted:
+            return persisted.review_word_threshold, persisted.review_chunk_size
+        return REVIEW_WORD_THRESHOLD, REVIEW_CHUNK_SIZE
 
     def validate_book(self, book_state: BookState) -> dict:
         """
@@ -121,7 +132,8 @@ class Orchestrator:
         
         # Split chapters into chunks
         chapters = list(book_state.chapters.items())
-        chunks = [chapters[i:i + REVIEW_CHUNK_SIZE] for i in range(0, len(chapters), REVIEW_CHUNK_SIZE)]
+        _, chunk_size = self._get_review_thresholds()
+        chunks = [chapters[i:i + chunk_size] for i in range(0, len(chapters), chunk_size)]
         
         # Collect all issues across chunks
         all_issues = []
@@ -621,7 +633,8 @@ class Orchestrator:
 
         # (M4) Use chunked review for long books to avoid context window overflow
         total_words = sum(len(c.split()) for c in book_state.chapters.values())
-        if total_words > REVIEW_WORD_THRESHOLD or len(book_state.chapters) > 10:
+        word_threshold, _ = self._get_review_thresholds()
+        if total_words > word_threshold or len(book_state.chapters) > 10:
             logger.info("Book '%s' has %d words/%d chapters — using chunked review",
                        book_state.title, total_words, len(book_state.chapters))
             return await self._chunked_review(book_state, max_turns)

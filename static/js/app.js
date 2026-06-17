@@ -163,12 +163,25 @@ function initModal() {
   });
 }
 
+/* ── Modal Action Listeners (CSP-safe — no inline onclick) ─────── */
+function attachModalActionListeners(bookId) {
+  const detailContent = $('detailContent');
+  detailContent.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action;
+      if (action === 'review') triggerReview(bookId);
+      else if (action === 'retry') retryBook(bookId);
+    });
+  });
+}
+
 async function openDetail(bookId) {
   currentBookId = bookId;
   try {
     const book = await apiFetch('/books/' + bookId);
     $('detailTitle').textContent = book.title;
     $('detailContent').innerHTML = renderDetail(book);
+    attachModalActionListeners(bookId);
 
     $('detailOverlay').classList.add('active');
 
@@ -272,10 +285,10 @@ function renderDetail(book) {
     html += `<a class="btn btn-secondary btn-sm" href="${API}/books/${book.id}/export/pdf">📥 PDF</a>`;
   }
   if (book.status === 'completed') {
-    html += `<button class="btn btn-secondary btn-sm" onclick="triggerReview('${book.id}')">🔍 Trigger Review</button>`;
+    html += `<button class="btn btn-secondary btn-sm" data-action="review">🔍 Trigger Review</button>`;
   }
   if (book.status === 'failed') {
-    html += `<button class="btn btn-secondary btn-sm" onclick="retryBook('${book.id}')">🔄 Retry</button>`;
+    html += `<button class="btn btn-secondary btn-sm" data-action="retry">🔄 Retry</button>`;
   }
   html += `</div>`;
 
