@@ -209,22 +209,30 @@ class AIClient:
 class ReviewerClient:
     """
     A dedicated client for review/correction tasks. Can use a different
-    endpoint and model than the main AIClient while sharing the same
-    API key and HTTP connection.
+    endpoint, model, and API key than the main AIClient while sharing
+    the same HTTP connection.
     """
 
     def __init__(self, main_client: AIClient,
                  endpoint_url: Optional[str] = None,
-                 model_name: Optional[str] = None):
+                 model_name: Optional[str] = None,
+                 api_key: Optional[str] = None):
         """
         Args:
-            main_client: The primary AIClient (for shared API key + HTTP client)
+            main_client: The primary AIClient (for shared HTTP connection)
             endpoint_url: Override endpoint (uses main_client's if None)
             model_name: Override model (uses main_client's if None)
+            api_key: Override API key (uses main_client's if None)
         """
         self._main = main_client
         self._endpoint_url = (endpoint_url or main_client.endpoint_url).rstrip('/')
         self._model_name = model_name or main_client.model_name
+        self._api_key = api_key  # None means use main client's key
+        self._headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            self._headers["Authorization"] = f"Bearer {self._api_key}"
+        elif main_client.api_key:
+            self._headers["Authorization"] = f"Bearer {main_client.api_key}"
 
     @property
     def endpoint_url(self) -> str:
@@ -244,31 +252,52 @@ class ReviewerClient:
         self._model_name = value
         logger.info("Reviewer model changed to: %s", self._model_name)
 
+    @property
+    def api_key(self) -> Optional[str]:
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: Optional[str]):
+        self._api_key = value
+        self._rebuild_headers()
+        logger.info("Reviewer API key updated")
+
+    def _rebuild_headers(self):
+        """Rebuild the Authorization header based on current key config."""
+        self._headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            self._headers["Authorization"] = f"Bearer {self._api_key}"
+        elif self._main.api_key:
+            self._headers["Authorization"] = f"Bearer {self._main.api_key}"
+
     def get_config(self) -> Dict[str, Any]:
         """Return reviewer configuration."""
         return {
             "endpoint_url": self._endpoint_url,
             "model_name": self._model_name,
+            "api_key_set": self._api_key is not None and self._api_key != "",
         }
 
     async def update_config(self, endpoint_url: Optional[str] = None,
-                            model_name: Optional[str] = None):
+                            model_name: Optional[str] = None,
+                            api_key: Optional[str] = None):
         """Update reviewer configuration at runtime."""
         if endpoint_url is not None:
             self.endpoint_url = endpoint_url
         if model_name is not None:
             self.model_name = model_name
+        if api_key is not None:
+            self.api_key = api_key
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """
         Fetch the list of available models from the reviewer's LLM API.
-        Uses the reviewer's endpoint URL but shares the main client's
-        HTTP connection and auth headers.
+        Uses the reviewer's endpoint URL and API key with the shared HTTP connection.
         """
         # Handle /v1 suffix
         url = f"{self._endpoint_url}/models" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/models"
         try:
-            response = await self._main._client.get(url, headers=self._main._headers)
+            response = await self._main._client.get(url, headers=self._headers)
             response.raise_for_status()
             result = response.json()
 
@@ -325,7 +354,7 @@ class ReviewerClient:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                response = await self._main._client.post(url, json=payload, headers=self._main._headers)
+                response = await self._main._client.post(url, json=payload, headers=self._headers)
                 response.raise_for_status()
                 result = response.json()
 

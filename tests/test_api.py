@@ -1,5 +1,7 @@
 """Tests for the FastAPI application endpoints."""
 import asyncio
+import shutil
+from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -7,6 +9,11 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app, ai_client
+from app.storage import (
+    BOOKS_DIR, CONFIG_FILE, EXPORTS_DIR,
+    ensure_data_dir, ensure_exports_dir,
+    set_test_dirs, reset_to_defaults,
+)
 
 
 @pytest_asyncio.fixture
@@ -18,26 +25,42 @@ async def client():
 
 
 @pytest.fixture(autouse=True)
-def _reset_config():
-    """Reset AI client config before each test.
+def _isolate_api_tests(tmp_path):
+    """Redirect storage paths to tmp_path and reset AI client config.
 
-    (C3 fix: uses server_config instead of old module-level globals)
+    CRITICAL: Must redirect BOOKS_DIR/CONFIG_FILE/EXPORTS_DIR to tmp_path
+    before any test runs, otherwise tests operate on the real
+    ~/.hullucinator_data directory and can destroy production data.
     """
     import app.main as _m
+
+    # Redirect storage paths to temp directory — MUST happen before any test
+    set_test_dirs(tmp_path)
+
+    # Reset AI client config
     ai_client.endpoint_url = ""
     ai_client.model_name = ""
     ai_client.api_key = None
     _m.server_config.configured = False
     _m.server_config.reviewer_client = None
     _m.server_config.persisted = None
+    _m.reviewer_client = None
+
+    # Ensure temp directories exist
+    ensure_data_dir()
+    ensure_exports_dir()
+
     yield
-    # Clean up after test
+
+    # Cleanup: restore paths to real defaults and reset config
+    reset_to_defaults()
     ai_client.endpoint_url = ""
     ai_client.model_name = ""
     ai_client.api_key = None
     _m.server_config.configured = False
     _m.server_config.reviewer_client = None
     _m.server_config.persisted = None
+    _m.reviewer_client = None
 
 
 class TestHealthEndpoint:

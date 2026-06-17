@@ -56,7 +56,7 @@ The built-in web interface provides:
 | `GET` | `/` | Web interface (HTML) |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
-| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model, max review turns). Persisted to `~/.hullucinator_data/data/config.json` (no API keys). |
+| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model/key, max review turns, review thresholds). Persisted to `~/.hullucinator_data/data/config.json` (no API keys). |
 | `GET` | `/api/models` | List available models from writer's LLM provider |
 | `GET` | `/api/reviewer/models` | List available models from reviewer's LLM provider |
 | `POST` | `/api/books/create` | Create a new book (background generation) |
@@ -75,6 +75,7 @@ The built-in web interface provides:
 | `AI_API_KEY` | *(empty)* | API key (Bearer auth) |
 | `REVIEWER_ENDPOINT_URL` | *(empty)* | Reviewer LLM endpoint (empty = use writer's) |
 | `REVIEWER_MODEL_NAME` | *(empty)* | Reviewer model (empty = use writer's) |
+| `REVIEWER_API_KEY` | *(empty)* | Reviewer API key (empty = use writer's) |
 | `HULLUCINATOR_HOST` | `0.0.0.0` | Server bind address |
 | `HULLUCINATOR_PORT` | `8000` | Server port |
 | `PDF_FONT_DIR` | `/usr/share/fonts/truetype/dejavu` | PDF font directory |
@@ -93,7 +94,7 @@ curl -X POST http://localhost:8000/api/config \
 # Configure separate reviewer
 curl -X POST http://localhost:8000/api/config \
   -H "Content-Type: application/json" \
-  -d '{"reviewer_endpoint_url": "http://reviewer-server:9000", "reviewer_model_name": "critic-model", "review_max_turns": 3}'
+  -d '{"reviewer_endpoint_url": "http://reviewer-server:9000", "reviewer_model_name": "critic-model", "reviewer_api_key": "sk-reviewer-key", "review_max_turns": 3, "review_word_threshold": 25000, "review_chunk_size": 4}'
 
 # Update API key only
 curl -X POST http://localhost:8000/api/config \
@@ -189,6 +190,7 @@ AI_API_KEY=your-api-key
 # Reviewer (optional — leave empty to use writer's endpoint/model)
 REVIEWER_ENDPOINT_URL=
 REVIEWER_MODEL_NAME=
+REVIEWER_API_KEY=
 
 # Server
 HULLUCINATOR_HOST=0.0.0.0
@@ -220,7 +222,7 @@ hullucinator/
 ├── ~/.hullucinator_data/   # User data directory (cross-platform)
 │   ├── data/
 │   │   ├── books/           # Generated books stored as JSON files
-│   │   └── config.json      # Persisted AI config (endpoint URLs, model names, max turns — no API keys)
+│   │   └── config.json      # Persisted AI config (endpoint URLs, model names, review settings — no API keys)
 │   └── exports/             # Exported EPUB/PDF files
 ├── .env.example         # Environment variable template
 ├── pyproject.toml       # Python project metadata & dependencies

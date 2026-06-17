@@ -13,6 +13,7 @@ FastAPI application with:
 - All REST API endpoints (create, list, get, validate, export, review)
 """
 import os
+import re
 import uuid
 import logging
 import asyncio
@@ -27,6 +28,15 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
+
+# Characters not allowed in filenames on any major OS
+_INVALID_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00]')
+
+
+def _safe_download_name(title: str) -> str:
+    """Sanitize a book title for use as a cross-platform download filename."""
+    safe = _INVALID_FILENAME_RE.sub('_', title).strip().strip('. ')
+    return safe or 'untitled'
 
 from app.schemas import BookState, BookCreateRequest, AIConfig
 from app.ai_client import AIClient, ReviewerClient
@@ -53,6 +63,7 @@ class ServerConfig:
     reviewer_client: "ReviewerClient | None" = None
     persisted: "AIConfig | None" = None
     max_concurrent_tasks: int = 5
+    reviewer_api_key: str | None = None
 
 
 # ── Load persisted config (the ONLY source of AI configuration) ─────────
@@ -79,11 +90,13 @@ ai_client = AIClient(
 
 # Reviewer client: created only if persisted config specifies one
 reviewer_client: ReviewerClient | None = None
+reviewer_api_key = os.environ.get("REVIEWER_API_KEY") or None
 if _persisted and (_persisted.reviewer_endpoint_url or _persisted.reviewer_model_name):
     reviewer_client = ReviewerClient(
         ai_client,
         endpoint_url=_persisted.reviewer_endpoint_url or None,
         model_name=_persisted.reviewer_model_name or None,
+        api_key=reviewer_api_key or None,
     )
     logger.info("Reviewer Endpoint: %s, Model: %s",
                 reviewer_client.endpoint_url, reviewer_client.model_name)
@@ -95,6 +108,7 @@ server_config = ServerConfig(
     configured=configured,
     reviewer_client=reviewer_client,
     persisted=_persisted,
+    reviewer_api_key=reviewer_api_key,
 )
 
 # ── Background task registry ────────────────────────────────────────────
@@ -174,7 +188,10 @@ class AIConfigUpdate(BaseModel):
     # Reviewer settings (optional — empty/None means use same as writer)
     reviewer_endpoint_url: str | None = None
     reviewer_model_name: str | None = None
+    reviewer_api_key: str | None = None
     review_max_turns: int | None = None
+    review_word_threshold: int | None = None
+    review_chunk_size: int | None = None
 
 
 class ModelInfo(BaseModel):
@@ -190,7 +207,10 @@ class AIConfigResponse(BaseModel):
     api_key_set: bool
     reviewer_endpoint_url: str
     reviewer_model_name: str
+    reviewer_api_key_set: bool
     review_max_turns: int
+    review_word_threshold: int
+    review_chunk_size: int
 
 
 # ── Lifespan ────────────────────────────────────────────────────────────
@@ -314,14 +334,19 @@ async def get_ai_config():
     """Get current AI configuration (including reviewer settings)."""
     reviewer_ep = ""
     reviewer_model = ""
+    reviewer_key_set = False
     rc = server_config.reviewer_client
     if rc:
         rconf = rc.get_config()
         reviewer_ep = rconf.get("endpoint_url", "")
         reviewer_model = rconf.get("model_name", "")
+        reviewer_key_set = rconf.get("api_key_set", False)
 
-    # Use persisted review_max_turns, or fall back to global default
-    default_turns = server_config.persisted.review_max_turns if server_config.persisted else 2
+    # Use persisted config values, or fall back to defaults
+    persisted = server_config.persisted
+    default_turns = persisted.review_max_turns if persisted else 2
+    default_word_threshold = persisted.review_word_threshold if persisted else 30_000
+    default_chunk_size = persisted.review_chunk_size if persisted else 5
 
     # Re-evaluate configured status from live client state
     server_config.configured = bool(ai_client.endpoint_url and ai_client.model_name)
@@ -333,7 +358,10 @@ async def get_ai_config():
         api_key_set=ai_client.api_key is not None and ai_client.api_key != "",
         reviewer_endpoint_url=reviewer_ep,
         reviewer_model_name=reviewer_model,
+        reviewer_api_key_set=reviewer_key_set,
         review_max_turns=default_turns,
+        review_word_threshold=default_word_threshold,
+        review_chunk_size=default_chunk_size,
     )
 
 
@@ -358,29 +386,39 @@ async def update_ai_config(config: AIConfigUpdate):
                 server_config.reviewer_client.endpoint_url = ""
             if config.reviewer_model_name == "":
                 server_config.reviewer_client.model_name = ""
-    elif config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None:
+            if config.reviewer_api_key == "":
+                server_config.reviewer_client.api_key = ""
+    elif config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None or config.reviewer_api_key is not None:
         if server_config.reviewer_client is None:
             # Create one if it doesn't exist yet
             endpoint = config.reviewer_endpoint_url or ai_client.endpoint_url
             model = config.reviewer_model_name or ai_client.model_name
+            rkey = config.reviewer_api_key or None
             if endpoint or model:
-                server_config.reviewer_client = ReviewerClient(ai_client, endpoint_url=endpoint, model_name=model)
+                server_config.reviewer_client = ReviewerClient(ai_client, endpoint_url=endpoint, model_name=model, api_key=rkey)
                 orchestrator.reviewer_client = server_config.reviewer_client
                 logger.info("Created reviewer client: endpoint=%s, model=%s", endpoint, model)
         else:
             await server_config.reviewer_client.update_config(
                 endpoint_url=config.reviewer_endpoint_url,
                 model_name=config.reviewer_model_name,
+                api_key=config.reviewer_api_key,
             )
 
-    # Persist config (without API key)
+    # Update server-level reviewer API key
+    if config.reviewer_api_key is not None:
+        server_config.reviewer_api_key = config.reviewer_api_key if config.reviewer_api_key != "" else None
+
+    # Persist config (without API keys)
     rc = server_config.reviewer_client
     persisted = AIConfig(
         endpoint_url=config.endpoint_url or ai_client.endpoint_url,
         model_name=config.model_name or ai_client.model_name,
         reviewer_endpoint_url=config.reviewer_endpoint_url or (rc.endpoint_url if rc else ""),
         reviewer_model_name=config.reviewer_model_name or (rc.model_name if rc else ""),
-        review_max_turns=config.review_max_turns if config.review_max_turns is not None else 2,
+        review_max_turns=config.review_max_turns if config.review_max_turns is not None else (server_config.persisted.review_max_turns if server_config.persisted else 2),
+        review_word_threshold=config.review_word_threshold if config.review_word_threshold is not None else (server_config.persisted.review_word_threshold if server_config.persisted else 30_000),
+        review_chunk_size=config.review_chunk_size if config.review_chunk_size is not None else (server_config.persisted.review_chunk_size if server_config.persisted else 5),
     )
     save_config(persisted)
     logger.info("Config saved to disk: endpoint=%s, model=%s",
@@ -631,19 +669,20 @@ async def export_book(book_id: str, fmt: str):
 
     try:
         review_data = book_state.review if book_state.review else None
+        download_name = _safe_download_name(book_state.title)
         if fmt == "epub":
             path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
             return FileResponse(
                 path,
                 media_type="application/epub+zip",
-                filename=f"{book_state.title}.epub",
+                filename=f"{download_name}.epub",
             )
         elif fmt == "pdf":
             path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
             return FileResponse(
                 path,
                 media_type="application/pdf",
-                filename=f"{book_state.title}.pdf",
+                filename=f"{download_name}.pdf",
             )
         else:
             raise HTTPException(status_code=400, detail=f"Invalid format '{fmt}'. Use 'epub' or 'pdf'.")

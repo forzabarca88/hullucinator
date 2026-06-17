@@ -60,3 +60,6 @@ class AIConfig(BaseModel):
     reviewer_endpoint_url: str = ""
     reviewer_model_name: str = ""
     review_max_turns: int = Field(default=2, ge=1, le=10)
+    # Review thresholds for chunked review of long books
+    review_word_threshold: int = Field(default=30_000, ge=1_000, description="Words before chunked review is used")
+    review_chunk_size: int = Field(default=5, ge=1, le=20, description="Chapters per review chunk")

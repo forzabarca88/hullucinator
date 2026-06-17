@@ -22,11 +22,35 @@ from typing import Optional, List
 from app.schemas import BookState, AIConfig
 
 # User's home directory — platform-independent (works on Linux and Windows)
-HULLUCINATOR_DATA_DIR = Path.home() / ".hullucinator_data"
-DATA_DIR = HULLUCINATOR_DATA_DIR / "data"
-BOOKS_DIR = DATA_DIR / "books"
-EXPORTS_DIR = HULLUCINATOR_DATA_DIR / "exports"
-CONFIG_FILE = DATA_DIR / "config.json"
+# Tests can override these via set_test_dirs() to avoid polluting real data
+HULLUCINATOR_DATA_DIR: Path = Path.home() / ".hullucinator_data"
+DATA_DIR: Path = HULLUCINATOR_DATA_DIR / "data"
+BOOKS_DIR: Path = DATA_DIR / "books"
+EXPORTS_DIR: Path = HULLUCINATOR_DATA_DIR / "exports"
+CONFIG_FILE: Path = DATA_DIR / "config.json"
+
+
+def set_test_dirs(test_root: Path):
+    """Override storage paths for testing. Points all dirs/files to test_root.
+
+    Call this in test fixtures to isolate tests from the real data directory.
+    """
+    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, CONFIG_FILE
+    HULLUCINATOR_DATA_DIR = test_root
+    DATA_DIR = test_root / "data"
+    BOOKS_DIR = DATA_DIR / "books"
+    EXPORTS_DIR = test_root / "exports"
+    CONFIG_FILE = DATA_DIR / "config.json"
+
+
+def reset_to_defaults():
+    """Restore storage paths to the real ~/.hullucinator_data defaults."""
+    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, CONFIG_FILE
+    HULLUCINATOR_DATA_DIR = Path.home() / ".hullucinator_data"
+    DATA_DIR = HULLUCINATOR_DATA_DIR / "data"
+    BOOKS_DIR = DATA_DIR / "books"
+    EXPORTS_DIR = HULLUCINATOR_DATA_DIR / "exports"
+    CONFIG_FILE = DATA_DIR / "config.json"
 
 def ensure_data_dir():
     """Create the data/ and data/books/ directories under ~/.hullucinator_data/."""
@@ -86,6 +110,7 @@ def save_config(config: AIConfig):
     data = config.model_dump()
     # Strip any API key data — never persist secrets
     data.pop("api_key", None)
+    data.pop("reviewer_api_key", None)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
 

@@ -62,6 +62,11 @@
           <input id="setupReviewerEndpoint" type="url" placeholder="Leave empty to use writer endpoint">
         </div>
         <div class="field">
+          <label for="setupReviewerApiKey">Reviewer API Key</label>
+          <input id="setupReviewerApiKey" type="password" placeholder="Leave empty to use writer API key">
+          <span class="field-hint">Separate key for reviewer. Never saved to disk. Stored in memory only.</span>
+        </div>
+        <div class="field">
           <label for="setupReviewerModel">Reviewer Model</label>
           <div class="input-row">
             <input id="setupReviewerModel" placeholder="Leave empty to use writer model">
@@ -86,6 +91,16 @@
             <option value="5">5 turns — exhaustive</option>
           </select>
           <span class="field-hint">Number of critique → correct cycles per book.</span>
+        </div>
+        <div class="field">
+          <label for="setupWordThreshold">Chunked Review Word Threshold</label>
+          <input id="setupWordThreshold" type="number" min="1000" step="1000" value="30000">
+          <span class="field-hint">Books exceeding this word count use chunked review to avoid context overflow.</span>
+        </div>
+        <div class="field">
+          <label for="setupChunkSize">Chunk Size</label>
+          <input id="setupChunkSize" type="number" min="1" max="20" value="5">
+          <span class="field-hint">Number of chapters reviewed at once during chunked review.</span>
         </div>
       </div>
 
@@ -183,14 +198,25 @@
   <button class="close-btn" id="settingsClose">&times;</button>
   <h2>Configuration</h2>
 
-  <!-- Writer Settings -->
+  <!-- Connection (shared) -->
   <div class="settings-group">
-    <h3>Writer</h3>
+    <h3>Connection</h3>
 
     <div class="field">
       <label for="cfgEndpoint">Endpoint URL</label>
       <input id="cfgEndpoint" type="url" placeholder="http://192.168.0.40:1234">
     </div>
+
+    <div class="field">
+      <label for="cfgApiKey">API Key</label>
+      <input id="cfgApiKey" type="password" placeholder="Leave blank to keep current">
+      <span class="field-hint">Never persisted to disk.</span>
+    </div>
+  </div>
+
+  <!-- Writer Model -->
+  <div class="settings-group">
+    <h3>Writer Model</h3>
 
     <div class="field">
       <label for="cfgWriterModel">Model</label>
@@ -201,25 +227,25 @@
         </button>
       </div>
     </div>
-
-    <div class="field">
-      <label for="cfgApiKey">API Key</label>
-      <input id="cfgApiKey" type="password" placeholder="Leave blank to keep current">
-      <span class="field-hint">Never persisted to disk.</span>
-    </div>
   </div>
 
-  <!-- Reviewer Settings -->
+  <!-- Reviewer (optional) -->
   <div class="settings-group">
-    <h3>Reviewer <span class="optional-badge">Optional</span></h3>
+    <h3>Reviewer Model <span class="optional-badge">Optional</span></h3>
 
     <div class="field">
-      <label for="cfgReviewerEndpoint">Endpoint URL</label>
+      <label for="cfgReviewerEndpoint">Reviewer Endpoint</label>
       <input id="cfgReviewerEndpoint" type="url" placeholder="Leave empty to use writer endpoint">
     </div>
 
     <div class="field">
-      <label for="cfgReviewerModel">Model</label>
+      <label for="cfgReviewerApiKey">Reviewer API Key</label>
+      <input id="cfgReviewerApiKey" type="password" placeholder="Leave empty to use writer API key">
+      <span class="field-hint">Separate key for reviewer. Never persisted to disk. Stored in memory only.</span>
+    </div>
+
+    <div class="field">
+      <label for="cfgReviewerModel">Reviewer Model</label>
       <div class="input-row">
         <input id="cfgReviewerModel" placeholder="Leave empty to use writer model">
         <button class="btn btn-secondary btn-sm" id="fetchReviewerModelsBtn" title="Fetch reviewer models">
@@ -242,6 +268,16 @@
         <option value="5">5 turns</option>
       </select>
       <span class="field-hint">Per-book setting overrides this default.</span>
+    </div>
+    <div class="field">
+      <label for="cfgWordThreshold">Chunked Review Word Threshold</label>
+      <input id="cfgWordThreshold" type="number" min="1000" step="1000" value="30000">
+      <span class="field-hint">Books exceeding this word count use chunked review.</span>
+    </div>
+    <div class="field">
+      <label for="cfgChunkSize">Chunk Size</label>
+      <input id="cfgChunkSize" type="number" min="1" max="20" value="5">
+      <span class="field-hint">Chapters reviewed at once during chunked review.</span>
     </div>
   </div>
 

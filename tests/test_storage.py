@@ -2,8 +2,26 @@
 import json
 from pathlib import Path
 
-from app.storage import save_book, load_book, list_books, save_config, load_config, BOOKS_DIR, CONFIG_FILE
+import pytest
+
+from app.storage import (
+    save_book, load_book, list_books,
+    save_config, load_config,
+    set_test_dirs, reset_to_defaults,
+)
 from app.schemas import BookState, AIConfig
+
+
+@pytest.fixture(autouse=True)
+def _isolate_storage(tmp_path):
+    """Redirect all storage paths to a temp directory for test isolation.
+
+    CRITICAL: Never write to ~/.hullucinator_data during tests.
+    Always use tmp_path to avoid polluting the user's real data.
+    """
+    set_test_dirs(tmp_path)
+    yield
+    reset_to_defaults()
 
 
 class TestBookPersistence:
@@ -138,7 +156,7 @@ class TestBookPersistence:
 class TestConfigPersistence:
     """Test AIConfig save/load round-trip."""
 
-    def test_save_and_load_basic(self, tmp_path):
+    def test_save_and_load_basic(self):
         """Saving and loading AIConfig preserves endpoint, model, review settings."""
         config = AIConfig(
             endpoint_url="http://localhost:8080",
@@ -157,7 +175,7 @@ class TestConfigPersistence:
         assert loaded.reviewer_model_name == config.reviewer_model_name
         assert loaded.review_max_turns == config.review_max_turns
 
-    def test_save_and_load_no_reviewer(self, tmp_path):
+    def test_save_and_load_no_reviewer(self):
         """Config without reviewer settings."""
         config = AIConfig(
             endpoint_url="http://localhost:8080",
@@ -175,15 +193,14 @@ class TestConfigPersistence:
         assert loaded.reviewer_model_name == ""
         assert loaded.review_max_turns == 2
 
-    def test_load_nonexistent(self, tmp_path):
+    def test_load_nonexistent(self):
         """Loading from a non-existent config file returns None."""
-        # CONFIG_FILE is absolute; for this test we just check the function
-        # When the file doesn't exist, load_config returns None
-        # We can't easily test this with tmp_path since CONFIG_FILE is hardcoded
-        # Instead, verify the function handles missing file gracefully
-        pass  # Covered by the fact that load_config checks .exists()
+        # With autouse fixture, CONFIG_FILE points to tmp_path which is clean
+        # so load_config should return None
+        result = load_config()
+        assert result is None
 
-    def test_api_key_never_persisted(self, tmp_path):
+    def test_api_key_never_persisted(self):
         """API key is stripped before saving."""
         config = AIConfig(
             endpoint_url="http://localhost:8080",
@@ -195,6 +212,7 @@ class TestConfigPersistence:
         save_config(config)
 
         # Read the raw JSON file to verify no api_key field
+        from app.storage import CONFIG_FILE
         with open(CONFIG_FILE, "r") as f:
             raw = json.load(f)
         assert "api_key" not in raw

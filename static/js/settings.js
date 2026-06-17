@@ -45,8 +45,11 @@ async function checkConfig() {
       $('setupEndpoint').value = cfg.endpoint_url || '';
       $('setupModel').value = cfg.model_name || '';
       $('setupReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
+      $('setupReviewerApiKey').value = '';  // never display saved key
       $('setupReviewerModel').value = cfg.reviewer_model_name || '';
       $('setupMaxTurns').value = cfg.review_max_turns || 2;
+      $('setupWordThreshold').value = cfg.review_word_threshold || 30000;
+      $('setupChunkSize').value = cfg.review_chunk_size || 5;
     } else {
       // Already configured — populate settings panel fields
       $('cfgEndpoint').value = cfg.endpoint_url || '';
@@ -54,6 +57,8 @@ async function checkConfig() {
       $('cfgReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
       $('cfgReviewerModel').value = cfg.reviewer_model_name || '';
       $('cfgMaxTurns').value = cfg.review_max_turns || 2;
+      $('cfgWordThreshold').value = cfg.review_word_threshold || 30000;
+      $('cfgChunkSize').value = cfg.review_chunk_size || 5;
       // Load the library of existing books
       loadBooks();
     }
@@ -80,8 +85,11 @@ async function loadConfig() {
     $('cfgWriterModel').value = cfg.model_name || '';
     $('cfgApiKey').value = '';  // never display saved key
     $('cfgReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
+    $('cfgReviewerApiKey').value = '';  // never display saved key
     $('cfgReviewerModel').value = cfg.reviewer_model_name || '';
     $('cfgMaxTurns').value = cfg.review_max_turns || 2;
+    $('cfgWordThreshold').value = cfg.review_word_threshold || 30000;
+    $('cfgChunkSize').value = cfg.review_chunk_size || 5;
   } catch (err) {
     console.error('loadConfig error:', err);
   }
@@ -96,8 +104,11 @@ async function saveConfig() {
       model_name: $('cfgWriterModel').value.trim() || '',
       api_key: $('cfgApiKey').value.trim() || '',
       reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || '',
+      reviewer_api_key: $('cfgReviewerApiKey').value.trim() || '',
       reviewer_model_name: $('cfgReviewerModel').value.trim() || '',
       review_max_turns: parseInt($('cfgMaxTurns').value),
+      review_word_threshold: parseInt($('cfgWordThreshold').value),
+      review_chunk_size: parseInt($('cfgChunkSize').value),
     };
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
     toast('Configuration saved!', 'success');
@@ -134,8 +145,11 @@ async function saveSetupConfig() {
     model_name: model,
     api_key: apiKey || null,
     reviewer_endpoint_url: $('setupReviewerEndpoint').value.trim() || null,
+    reviewer_api_key: $('setupReviewerApiKey').value.trim() || null,
     reviewer_model_name: $('setupReviewerModel').value.trim() || null,
     review_max_turns: parseInt($('setupMaxTurns').value),
+    review_word_threshold: parseInt($('setupWordThreshold').value),
+    review_chunk_size: parseInt($('setupChunkSize').value),
   };
 
   try {
@@ -154,6 +168,8 @@ async function saveSetupConfig() {
     $('cfgReviewerEndpoint').value = res.config.reviewer_endpoint_url || '';
     $('cfgReviewerModel').value = res.config.reviewer_model_name || '';
     $('cfgMaxTurns').value = res.config.review_max_turns || 2;
+    $('cfgWordThreshold').value = res.config.review_word_threshold || 30000;
+    $('cfgChunkSize').value = res.config.review_chunk_size || 5;
     if ($('maxTurns')) $('maxTurns').value = res.config.review_max_turns || 2;
 
     // Load existing books
@@ -182,7 +198,9 @@ async function fetchModels(role, inputId) {
     const ep = epField ? epField.value.trim() : null;
     if (ep) {
       fetchUrl += '?endpoint_url=' + encodeURIComponent(ep);
-      const key = $('setupApiKey') ? $('setupApiKey').value.trim() : null;
+      const key = role === 'reviewer'
+        ? ($('setupReviewerApiKey') ? $('setupReviewerApiKey').value.trim() : null)
+        : ($('setupApiKey') ? $('setupApiKey').value.trim() : null);
       if (key) fetchUrl += '&api_key=' + encodeURIComponent(key);
     } else if (role === 'reviewer') {
       // No reviewer endpoint — use writer's endpoint for fetching
@@ -198,7 +216,9 @@ async function fetchModels(role, inputId) {
     // the endpoint/key the user just typed (not the persisted config).
     const epField = role === 'reviewer' ? $('cfgReviewerEndpoint') : $('cfgEndpoint');
     const ep = epField ? epField.value.trim() : null;
-    const apiKey = $('cfgApiKey') ? $('cfgApiKey').value.trim() : null;
+    const apiKey = role === 'reviewer'
+      ? ($('cfgReviewerApiKey') ? $('cfgReviewerApiKey').value.trim() : null)
+      : ($('cfgApiKey') ? $('cfgApiKey').value.trim() : null);
 
     if (ep) {
       fetchUrl += '?endpoint_url=' + encodeURIComponent(ep);
@@ -208,7 +228,8 @@ async function fetchModels(role, inputId) {
       const writerEp = $('cfgEndpoint') ? $('cfgEndpoint').value.trim() : null;
       if (writerEp) {
         fetchUrl = '/models?endpoint_url=' + encodeURIComponent(writerEp);
-        if (apiKey) fetchUrl += '&api_key=' + encodeURIComponent(apiKey);
+        const writerKey = $('cfgApiKey') ? $('cfgApiKey').value.trim() : null;
+        if (writerKey) fetchUrl += '&api_key=' + encodeURIComponent(writerKey);
       }
     }
   }
