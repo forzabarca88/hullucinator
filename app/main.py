@@ -3,7 +3,7 @@ Hullucinator — AI-Powered E-Book Generator
 
 FastAPI application with:
 - GUI-first configuration (no environment variable defaults)
-- Runtime-reconfigurable AI settings via API (persisted to data/config.json)
+- Runtime-reconfigurable AI settings via API (persisted to ~/.hullucinator_data/data/config.json)
 - Model listing from the LLM provider
 - Separate reviewer endpoint/model for review tasks
 - Iterative review-correction loop with configurable max turns
@@ -341,7 +341,7 @@ async def get_ai_config():
 async def update_ai_config(config: AIConfigUpdate):
     """
     Update AI configuration at runtime. Changes take effect immediately
-    for all subsequent tasks. Persisted to data/config.json (no API keys).
+    for all subsequent tasks. Persisted to ~/.hullucinator_data/data/config.json (no API keys).
     """
     # Update writer client
     await ai_client.update_config(

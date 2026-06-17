@@ -56,7 +56,7 @@ The built-in web interface provides:
 | `GET` | `/` | Web interface (HTML) |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
-| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model, max review turns). Persisted to `data/config.json` (no API keys). |
+| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model, max review turns). Persisted to `~/.hullucinator_data/data/config.json` (no API keys). |
 | `GET` | `/api/models` | List available models from writer's LLM provider |
 | `GET` | `/api/reviewer/models` | List available models from reviewer's LLM provider |
 | `POST` | `/api/books/create` | Create a new book (background generation) |
@@ -104,7 +104,7 @@ curl -X POST http://localhost:8000/api/config \
 curl http://localhost:8000/api/models
 ```
 
-**Note:** Config changes are persisted to `data/config.json` automatically. API keys are never saved for security.
+**Note:** Config changes are persisted to `~/.hullucinator_data/data/config.json` automatically. API keys are never saved for security.
 
 ### Create a Book (API)
 
@@ -217,10 +217,11 @@ hullucinator/
 │   │   ├── app.js       # Main app (create form, library, detail modal, review section)
 │   │   └── settings.js  # Settings panel (writer/reviewer config, model fetch)
 │   └── index.html       # Clean HTML skeleton (links CSS/JS, defines DOM structure)
-├── data/
-│   ├── books/           # Generated books stored as JSON files
-│   └── config.json      # Persisted AI config (endpoint URLs, model names, max turns — no API keys)
-├── exports/             # Exported EPUB/PDF files
+├── ~/.hullucinator_data/   # User data directory (cross-platform)
+│   ├── data/
+│   │   ├── books/           # Generated books stored as JSON files
+│   │   └── config.json      # Persisted AI config (endpoint URLs, model names, max turns — no API keys)
+│   └── exports/             # Exported EPUB/PDF files
 ├── .env.example         # Environment variable template
 ├── pyproject.toml       # Python project metadata & dependencies
 ├── requirements.txt     # Pip dependencies

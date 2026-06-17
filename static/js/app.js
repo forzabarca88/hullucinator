@@ -95,6 +95,10 @@ async function loadBooks() {
       return;
     }
 
+    // Remove the initial empty-state div from the HTML skeleton
+    const emptyState = list.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+
     // Build a set of expected book IDs
     const expectedIds = new Set(books.map(b => b.id));
     const booksMap = new Map(books.map(b => [b.id, b]));
@@ -202,13 +206,21 @@ function closeModal() {
 function renderDetail(book) {
   let html = '';
 
-  // Status & Metadata
+  // Settings used when creating this book
+  html += `<div class="modal-section">
+    <h3>Settings</h3>
+    <div class="detail-settings">
+      <div class="detail-setting"><span class="detail-label">Prompt</span><div class="detail-value">${esc(book.prompt)}</div></div>
+      <div class="detail-setting"><span class="detail-label">Length</span><div class="detail-value">${esc(book.length || 'novel')}</div></div>
+      ${book.tags && book.tags.length ? `<div class="detail-setting"><span class="detail-label">Tags</span><div class="detail-value">${book.tags.map(t => `<span class="tag-badge">${esc(t)}</span>`).join(' ')}</div></div>` : ''}
+      ${book.review_max_turns ? `<div class="detail-setting"><span class="detail-label">Max Review Turns</span><div class="detail-value">${book.review_max_turns}</div></div>` : ''}
+    </div>
+  </div>`;
+
+  // Status
   html += `<div class="modal-section">
     <h3>Status</h3>
     <p>${statusBadge(book.status)}</p>
-    ${book.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue);margin-left:.5rem">${esc(book.length)}</span>` : ''}
-    ${(book.tags || []).map(t => `<span class="tag-badge" style="margin-left:.3rem">${esc(t)}</span>`).join('')}
-    ${book.review_max_turns ? `<span style="margin-left:.5rem;color:var(--muted);font-size:.85rem">Max review turns: ${book.review_max_turns}</span>` : ''}
   </div>`;
 
   // Progress bar

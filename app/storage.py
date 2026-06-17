@@ -1,8 +1,19 @@
 """
 JSON file persistence layer.
 
-Uses an absolute path derived from the project root so that storage works
-regardless of the working directory from which the server is started.
+Stores all persisted data in the user's home directory under
+`~/.hullucinator_data/` so that books, config, and exports survive
+regardless of where the project is cloned or installed.
+
+Directory layout:
+    ~/.hullucinator_data/
+    ├── data/
+    │   ├── config.json
+    │   └── books/          # one JSON file per book
+    └── exports/            # exported EPUB/PDF files
+
+Works on both Linux and Windows (Path.home() resolves to the
+platform-appropriate home directory).
 """
 import json
 from pathlib import Path
@@ -10,20 +21,20 @@ from typing import Optional, List
 
 from app.schemas import BookState, AIConfig
 
-# Absolute path: one level up from this file's parent (app/) is the project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+# User's home directory — platform-independent (works on Linux and Windows)
+HULLUCINATOR_DATA_DIR = Path.home() / ".hullucinator_data"
+DATA_DIR = HULLUCINATOR_DATA_DIR / "data"
 BOOKS_DIR = DATA_DIR / "books"
-EXPORTS_DIR = PROJECT_ROOT / "exports"
+EXPORTS_DIR = HULLUCINATOR_DATA_DIR / "exports"
 CONFIG_FILE = DATA_DIR / "config.json"
 
-
 def ensure_data_dir():
+    """Create the data/ and data/books/ directories under ~/.hullucinator_data/."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
-
 def ensure_exports_dir():
+    """Create the exports/ directory under ~/.hullucinator_data/."""
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
