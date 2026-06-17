@@ -2,7 +2,7 @@
 Hullucinator — AI-Powered E-Book Generator
 
 FastAPI application with:
-- Environment-variable configuration (AI endpoint, model, API key)
+- GUI-first configuration (no environment variable defaults)
 - Runtime-reconfigurable AI settings via API (persisted to data/config.json)
 - Model listing from the LLM provider
 - Separate reviewer endpoint/model for review tasks
@@ -13,9 +13,9 @@ FastAPI application with:
 - All REST API endpoints (create, list, get, validate, export, review)
 """
 import os
-import sys
 import uuid
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -36,47 +36,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Configuration from environment variables ────────────────────────────
-
-AI_ENDPOINT_URL = os.environ.get("AI_ENDPOINT_URL", "http://192.168.0.40:1234")
-AI_MODEL_NAME = os.environ.get("AI_MODEL_NAME", "qwen3.6-27b")
-AI_API_KEY = os.environ.get("AI_API_KEY", "")
+# ── Network bind (only env vars that affect the server itself, not AI) ──
 HOST = os.environ.get("HULLUCINATOR_HOST", "0.0.0.0")
 PORT = int(os.environ.get("HULLUCINATOR_PORT", "8000"))
 
-# Reviewer defaults (empty = use same as writer)
-REVIEWER_ENDPOINT_URL = os.environ.get("REVIEWER_ENDPOINT_URL", "")
-REVIEWER_MODEL_NAME = os.environ.get("REVIEWER_MODEL_NAME", "")
-
-logger.info("AI Endpoint: %s", AI_ENDPOINT_URL)
-logger.info("AI Model: %s", AI_MODEL_NAME)
-
-# ── Load persisted config (overrides env vars where set) ────────────────
+# ── Load persisted config (the ONLY source of AI configuration) ─────────
+# No env var defaults. User must configure via the GUI first.
 
 _persisted = load_config()
+configured = bool(_persisted and _persisted.endpoint_url and _persisted.model_name)
+
+logger.info("Configured: %s", configured)
 if _persisted:
-    if _persisted.endpoint_url:
-        AI_ENDPOINT_URL = _persisted.endpoint_url
-    if _persisted.model_name:
-        AI_MODEL_NAME = _persisted.model_name
-    logger.info("Loaded persisted config (endpoint=%s, model=%s)",
-                _persisted.endpoint_url, _persisted.model_name)
+    logger.info("Loaded persisted config (endpoint=%s, model=%s, reviewer_endpoint=%s, reviewer_model=%s)",
+                _persisted.endpoint_url, _persisted.model_name,
+                _persisted.reviewer_endpoint_url, _persisted.reviewer_model_name)
 
 # ── Singleton instances ─────────────────────────────────────────────────
 
+# Create the AI client. If not yet configured, use placeholder values.
+# The client is reconfigured at runtime when the user saves settings.
 ai_client = AIClient(
-    endpoint_url=AI_ENDPOINT_URL,
-    model_name=AI_MODEL_NAME,
-    api_key=AI_API_KEY if AI_API_KEY else None,
+    endpoint_url=_persisted.endpoint_url if _persisted and _persisted.endpoint_url else "",
+    model_name=_persisted.model_name if _persisted and _persisted.model_name else "",
+    api_key=os.environ.get("AI_API_KEY") or None,  # API key from env only — never persisted
 )
 
-# Reviewer client: uses different endpoint/model if configured
+# Reviewer client: created only if persisted config specifies one
 reviewer_client: ReviewerClient | None = None
-if REVIEWER_ENDPOINT_URL or REVIEWER_MODEL_NAME:
+if _persisted and (_persisted.reviewer_endpoint_url or _persisted.reviewer_model_name):
     reviewer_client = ReviewerClient(
         ai_client,
-        endpoint_url=REVIEWER_ENDPOINT_URL or None,
-        model_name=REVIEWER_MODEL_NAME or None,
+        endpoint_url=_persisted.reviewer_endpoint_url or None,
+        model_name=_persisted.reviewer_model_name or None,
     )
     logger.info("Reviewer Endpoint: %s, Model: %s",
                 reviewer_client.endpoint_url, reviewer_client.model_name)
@@ -87,6 +79,24 @@ orchestrator = Orchestrator(ai_client, reviewer_client=reviewer_client)
 
 # Map of book_id → asyncio.Task for in-progress generations
 _active_tasks: dict[str, "asyncio.Task"] = {}
+
+
+def _check_configured():
+    """Raise 400 if AI is not configured (checks live client state)."""
+    if not ai_client.endpoint_url or not ai_client.model_name:
+        raise HTTPException(
+            status_code=400,
+            detail="AI is not configured. Please set your endpoint URL, model, and API key in Settings first.",
+        )
+
+
+def _check_endpoint():
+    """Raise 400 if no endpoint URL is set. Used for model listing during setup."""
+    if not ai_client.endpoint_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Endpoint URL is required. Set it in Settings first.",
+        )
 
 
 async def _run_generation_pipeline(book_id: str):
@@ -140,6 +150,7 @@ class ModelInfo(BaseModel):
 
 class AIConfigResponse(BaseModel):
     """Schema for the GET /api/config response."""
+    configured: bool
     endpoint_url: str
     model_name: str
     api_key_set: bool
@@ -153,7 +164,7 @@ class AIConfigResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Hullucinator starting up...")
+    logger.info("Hullucinator starting up (configured=%s)...", configured)
     yield
     # Shutdown: close HTTP client
     await ai_client.close()
@@ -288,7 +299,7 @@ loadBooks();setInterval(loadBooks,10000);
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "hullucinator"}
+    return {"status": "healthy", "service": "hullucinator", "configured": configured}
 
 
 # ── AI Configuration Endpoints ──────────────────────────────────────────
@@ -296,6 +307,8 @@ async def health_check():
 @app.get("/api/config")
 async def get_ai_config():
     """Get current AI configuration (including reviewer settings)."""
+    global configured
+
     reviewer_ep = ""
     reviewer_model = ""
     if reviewer_client:
@@ -303,13 +316,20 @@ async def get_ai_config():
         reviewer_ep = rconf.get("endpoint_url", "")
         reviewer_model = rconf.get("model_name", "")
 
+    # Use persisted review_max_turns, or fall back to global default
+    default_turns = _persisted.review_max_turns if _persisted else 2
+
+    # Re-evaluate configured status from live client state
+    configured = bool(ai_client.endpoint_url and ai_client.model_name)
+
     return AIConfigResponse(
+        configured=configured,
         endpoint_url=ai_client.endpoint_url,
         model_name=ai_client.model_name,
         api_key_set=ai_client.api_key is not None and ai_client.api_key != "",
         reviewer_endpoint_url=reviewer_ep,
         reviewer_model_name=reviewer_model,
-        review_max_turns=2,  # global default
+        review_max_turns=default_turns,
     )
 
 
@@ -319,6 +339,8 @@ async def update_ai_config(config: AIConfigUpdate):
     Update AI configuration at runtime. Changes take effect immediately
     for all subsequent tasks. Persisted to data/config.json (no API keys).
     """
+    global configured, reviewer_client, _persisted
+
     # Update writer client
     await ai_client.update_config(
         endpoint_url=config.endpoint_url,
@@ -354,14 +376,99 @@ async def update_ai_config(config: AIConfigUpdate):
     logger.info("Config saved to disk: endpoint=%s, model=%s",
                 persisted.endpoint_url, persisted.model_name)
 
-    return {"status": "ok", "config": get_ai_config()}
+    # Update module-level persisted config so get_ai_config returns fresh values
+    _persisted = persisted
+
+    # Re-evaluate configured status
+    configured = bool(ai_client.endpoint_url and ai_client.model_name)
+
+    return {"status": "ok", "config": await get_ai_config()}
 
 
 @app.get("/api/models")
-async def list_available_models():
-    """List available models from the LLM provider."""
-    models = await ai_client.list_models()
-    return {"models": models, "current_model": ai_client.model_name}
+async def list_available_models(
+    endpoint_url: str | None = None,
+    api_key: str | None = None,
+):
+    """
+    List available models from the LLM provider.
+    Accepts optional endpoint_url/api_key query params for setup wizard
+    fetching before config is saved.
+    """
+    # Allow setup wizard to pass endpoint directly
+    prev_endpoint = ai_client.endpoint_url
+    prev_api_key = ai_client.api_key
+    if endpoint_url:
+        ai_client.endpoint_url = endpoint_url
+    if api_key:
+        ai_client.api_key = api_key
+    _check_endpoint()
+    try:
+        models = await ai_client.list_models()
+        return {"models": models, "current_model": ai_client.model_name}
+    finally:
+        # Restore original values after fetch
+        ai_client.endpoint_url = prev_endpoint
+        ai_client.api_key = prev_api_key
+
+
+@app.get("/api/reviewer/models")
+async def list_reviewer_models(
+    endpoint_url: str | None = None,
+    api_key: str | None = None,
+):
+    """
+    List available models from the reviewer LLM provider.
+    Accepts optional endpoint_url/api_key query params for setup wizard.
+    """
+    # No reviewer client configured and no endpoint param → uses writer's
+    if reviewer_client is None and not endpoint_url:
+        return {"models": [], "current_model": "", "uses_writer": True}
+
+    # Setup wizard: make a direct request without modifying client state
+    if endpoint_url:
+        url = endpoint_url.rstrip('/')
+        url = f"{url}/models" if url.endswith('/v1') else f"{url}/v1/models"
+        headers = ai_client._headers
+        if api_key:
+            headers = {**headers, "Authorization": f"Bearer {api_key}"}
+        try:
+            response = await ai_client._client.get(url, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            models = _parse_models_response(result)
+            return {"models": models, "current_model": "", "uses_writer": False}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch models: {str(e)}")
+
+    # Normal path: use existing reviewer client
+    if reviewer_client is None:
+        return {"models": [], "current_model": "", "uses_writer": True}
+    if not reviewer_client.endpoint_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Reviewer endpoint URL is required. Set it first.",
+        )
+    models = await reviewer_client.list_models()
+    return {"models": models, "current_model": reviewer_client.model_name or "", "uses_writer": False}
+
+
+def _parse_models_response(result: dict) -> list:
+    """Parse OpenAI-compatible /v1/models response."""
+    models = []
+    if "data" in result:
+        for item in result["data"]:
+            models.append({
+                "id": item.get("id", item.get("name", "")),
+                "name": item.get("id", item.get("name", "")),
+            })
+    elif isinstance(result, list):
+        for item in result:
+            models.append({
+                "id": item.get("id", item.get("name", "")),
+                "name": item.get("id", item.get("name", "")),
+            })
+    return models
 
 
 # ── Book Endpoints ──────────────────────────────────────────────────────
@@ -373,6 +480,8 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
 
     Returns the book_id immediately so the client can poll for progress.
     """
+    _check_configured()
+
     book_id = str(uuid.uuid4())
     book_state = BookState(
         id=book_id,
@@ -389,7 +498,6 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
     save_book(book_id, book_state)
 
     # Start generation as a background task
-    import asyncio
     task = asyncio.create_task(_run_generation_pipeline(book_id))
     _active_tasks[book_id] = task
 
@@ -446,6 +554,8 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
 
     The review runs in the background. Poll the book status to track progress.
     """
+    _check_configured()
+
     book_state = load_book(book_id)
     if not book_state:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -474,7 +584,6 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
                 book.progress["error"] = str(e)
                 save_book(book_id, book)
 
-    import asyncio
     task = asyncio.create_task(_run_review())
     _active_tasks[book_id] = task
 

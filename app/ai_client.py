@@ -86,7 +86,8 @@ class AIClient:
         Fetch the list of available models from the LLM API.
         Uses the OpenAI-compatible /v1/models endpoint.
         """
-        url = f"{self._endpoint_url}/v1/models"
+        # Handle /v1 suffix: if endpoint already ends in /v1, don't double-append
+        url = f"{self._endpoint_url}/models" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/models"
         try:
             response = await self._client.get(url, headers=self._headers)
             response.raise_for_status()
@@ -106,6 +107,10 @@ class AIClient:
                         "id": item.get("id", item.get("name", "")),
                         "name": item.get("id", item.get("name", "")),
                     })
+            elif "error" in result:
+                # Provider returned an error JSON on 200 OK — treat as empty
+                logger.warning("Model listing returned error response: %s", result.get("error"))
+                return []
             else:
                 # Try to extract model info from a dict response
                 models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
@@ -139,7 +144,8 @@ class AIClient:
             max_retries: Number of retry attempts
             model_override: Optional model name to use instead of self._model_name
         """
-        url = f"{self._endpoint_url}/v1/chat/completions"
+        # Handle /v1 suffix
+        url = f"{self._endpoint_url}/chat/completions" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/chat/completions"
         payload = {
             "model": model_override or self._model_name,
             "messages": messages,
@@ -243,6 +249,48 @@ class ReviewerClient:
         if model_name is not None:
             self.model_name = model_name
 
+    async def list_models(self) -> List[Dict[str, Any]]:
+        """
+        Fetch the list of available models from the reviewer's LLM API.
+        Uses the reviewer's endpoint URL but shares the main client's
+        HTTP connection and auth headers.
+        """
+        # Handle /v1 suffix
+        url = f"{self._endpoint_url}/models" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/models"
+        try:
+            response = await self._main._client.get(url, headers=self._main._headers)
+            response.raise_for_status()
+            result = response.json()
+
+            models = []
+            if "data" in result:
+                for item in result["data"]:
+                    models.append({
+                        "id": item.get("id", item.get("name", "")),
+                        "name": item.get("id", item.get("name", "")),
+                    })
+            elif isinstance(result, list):
+                for item in result:
+                    models.append({
+                        "id": item.get("id", item.get("name", "")),
+                        "name": item.get("id", item.get("name", "")),
+                    })
+            elif "error" in result:
+                logger.warning("Reviewer model listing returned error response: %s", result.get("error"))
+                return []
+            else:
+                models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+
+            logger.info("Fetched %d reviewer models from %s", len(models), self._endpoint_url)
+            return models
+
+        except httpx.HTTPStatusError as e:
+            logger.warning("Reviewer model listing failed (HTTP %d): %s", e.response.status_code, e.response.text)
+            return []
+        except Exception as e:
+            logger.warning("Reviewer model listing failed: %s", e)
+            return []
+
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
@@ -253,7 +301,8 @@ class ReviewerClient:
         Send a completion request using the reviewer's endpoint/model
         but sharing the main client's HTTP connection and auth headers.
         """
-        url = f"{self._endpoint_url}/v1/chat/completions"
+        # Handle /v1 suffix
+        url = f"{self._endpoint_url}/chat/completions" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/chat/completions"
         payload = {
             "model": self._model_name,
             "messages": messages,

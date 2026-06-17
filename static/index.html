@@ -4,417 +4,116 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hullucinator — AI E-Book Generator</title>
-<style>
-/* ── Reset & Base ─────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-  --bg:        #0f0f1a;
-  --surface:   #16213e;
-  --surface2:  #1a1a2e;
-  --border:    rgba(255,255,255,.08);
-  --text:      #eaeaea;
-  --muted:     #a0a0b8;
-  --accent:    #e94560;
-  --accent-h:  #ff6b81;
-  --green:     #2ecc71;
-  --orange:    #f39c12;
-  --blue:      #3498db;
-  --red:       #e74c3c;
-  --radius:    12px;
-  --radius-sm: 8px;
-}
-
-body {
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  line-height: 1.6;
-}
-
-/* ── Header ───────────────────────────────────────────────────── */
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1.5rem 2rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
-.header h1 {
-  font-size: 1.5rem;
-  color: var(--accent);
-  letter-spacing: -.02em;
-}
-.header h1 span { color: var(--muted); font-weight: 400; }
-.header-actions { display: flex; gap: .5rem; }
-.icon-btn {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: var(--radius-sm);
-  padding: .5rem .8rem;
-  cursor: pointer;
-  font-size: 1.1rem;
-  transition: all .2s;
-}
-.icon-btn:hover { border-color: var(--accent); color: var(--text); }
-
-/* ── Layout ───────────────────────────────────────────────────── */
-.container {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 2rem;
-}
-
-/* ── Cards ────────────────────────────────────────────────────── */
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-.card h2 {
-  font-size: 1.2rem;
-  margin-bottom: 1rem;
-  color: var(--text);
-}
-
-/* ── Form Elements ────────────────────────────────────────────── */
-label {
-  display: block;
-  font-size: .75rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  margin-bottom: .3rem;
-}
-input, textarea, select {
-  width: 100%;
-  padding: .7rem .9rem;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: .95rem;
-  margin-bottom: .8rem;
-  transition: border-color .2s;
-}
-input:focus, textarea:focus, select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-textarea { min-height: 100px; resize: vertical; }
-select { cursor: pointer; appearance: auto; }
-
-/* ── Tags Input ───────────────────────────────────────────────── */
-.tags-row { display: flex; gap: .5rem; margin-bottom: .8rem; flex-wrap: wrap; align-items: center; }
-.tags-row input { flex: 1; margin-bottom: 0; }
-.tag-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: .3rem;
-  background: rgba(233,69,96,.15);
-  color: var(--accent);
-  padding: .2rem .6rem;
-  border-radius: 20px;
-  font-size: .8rem;
-}
-.tag-badge button {
-  background: none; border: none; color: var(--accent);
-  cursor: pointer; font-size: 1rem; line-height: 1; padding: 0;
-}
-.tag-badge button:hover { color: var(--accent-h); }
-
-/* ── Buttons ──────────────────────────────────────────────────── */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .7rem 1.3rem;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: .95rem;
-  cursor: pointer;
-  border: none;
-  transition: all .2s;
-}
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover { background: var(--accent-h); }
-.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
-.btn-secondary:hover { border-color: var(--accent); }
-.btn-sm { padding: .4rem .8rem; font-size: .85rem; }
-
-/* ── Book Cards ───────────────────────────────────────────────── */
-.book-list { display: flex; flex-direction: column; gap: .8rem; }
-.book-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.2rem 1.5rem;
-  cursor: pointer;
-  transition: all .2s;
-  position: relative;
-}
-.book-card:hover { border-color: var(--accent); }
-.book-card .book-title { font-size: 1.1rem; font-weight: 600; }
-.book-card .book-meta { display: flex; gap: .8rem; margin-top: .4rem; flex-wrap: wrap; align-items: center; }
-.book-card .book-prompt { color: var(--muted); font-size: .9rem; margin-top: .4rem;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ── Status Badges ────────────────────────────────────────────── */
-.badge {
-  display: inline-block;
-  padding: .2rem .6rem;
-  border-radius: 20px;
-  font-size: .7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-}
-.badge-pending, .badge-summary_generated { background: rgba(52,152,219,.15); color: var(--blue); }
-.badge-outline_generated, .badge-in_progress { background: rgba(243,156,18,.15); color: var(--orange); }
-.badge-completed { background: rgba(46,204,113,.15); color: var(--green); }
-.badge-reviewing { background: rgba(52,152,219,.25); color: var(--blue); }
-.badge-reviewed { background: rgba(46,204,113,.25); color: var(--green); }
-.badge-failed { background: rgba(231,76,60,.15); color: var(--red); }
-
-/* ── Progress Bar ─────────────────────────────────────────────── */
-.progress-bar {
-  width: 100%;
-  height: 6px;
-  background: var(--surface2);
-  border-radius: 3px;
-  overflow: hidden;
-  margin-top: .5rem;
-}
-.progress-fill {
-  height: 100%;
-  background: var(--blue);
-  transition: width .4s ease;
-  border-radius: 3px;
-}
-.progress-fill.complete { background: var(--green); }
-.progress-fill.fail { background: var(--red); }
-
-/* ── Detail Modal ─────────────────────────────────────────────── */
-.modal-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.7);
-  z-index: 200;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 2rem;
-  overflow-y: auto;
-}
-.modal-overlay.active { display: flex; }
-.modal {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  width: 100%;
-  max-width: 800px;
-  max-height: 85vh;
-  overflow-y: auto;
-  padding: 2rem;
-  margin-bottom: 2rem;
-}
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
-}
-.modal-header h2 { font-size: 1.4rem; flex: 1; }
-.modal-close {
-  background: none; border: none; color: var(--muted);
-  font-size: 1.5rem; cursor: pointer; padding: .2rem .5rem;
-}
-.modal-close:hover { color: var(--text); }
-
-.modal-section { margin-bottom: 1.5rem; }
-.modal-section h3 {
-  font-size: 1rem;
-  color: var(--accent);
-  margin-bottom: .5rem;
-}
-.modal-section p, .modal-section pre {
-  color: var(--muted);
-  font-size: .9rem;
-  white-space: pre-wrap;
-}
-.modal-section pre {
-  background: var(--surface2);
-  padding: 1rem;
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-}
-
-/* ── Review Section ───────────────────────────────────────────── */
-.review-section {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-.review-section h3 { color: var(--accent); margin-bottom: .8rem; }
-.review-score {
-  font-size: 2rem;
-  font-weight: 700;
-  text-align: center;
-  margin: .5rem 0;
-}
-.review-score.good { color: var(--green); }
-.review-score.ok { color: var(--orange); }
-.review-score.bad { color: var(--red); }
-.review-verdict {
-  text-align: center;
-  font-weight: 600;
-  margin-bottom: .8rem;
-}
-.review-verdict.passed { color: var(--green); }
-.review-verdict.failed { color: var(--red); }
-.review-critique {
-  background: var(--surface);
-  padding: .8rem;
-  border-radius: var(--radius-sm);
-  font-size: .85rem;
-  color: var(--muted);
-  white-space: pre-wrap;
-  max-height: 200px;
-  overflow-y: auto;
-}
-.correction-item {
-  background: var(--surface);
-  padding: .6rem .8rem;
-  border-radius: var(--radius-sm);
-  margin-bottom: .4rem;
-  font-size: .85rem;
-  border-left: 3px solid var(--orange);
-}
-.correction-item .corr-chapter { font-weight: 600; color: var(--text); }
-.correction-item .corr-type { color: var(--accent); font-size: .8rem; }
-
-/* ── Settings Panel ───────────────────────────────────────────── */
-.settings-panel {
-  display: none;
-  position: fixed;
-  top: 0; right: 0; bottom: 0;
-  width: 380px;
-  max-width: 90vw;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  z-index: 300;
-  overflow-y: auto;
-  padding: 2rem 1.5rem;
-  box-shadow: -4px 0 20px rgba(0,0,0,.4);
-}
-.settings-panel.active { display: block; }
-.settings-panel h2 {
-  font-size: 1.2rem;
-  margin-bottom: 1.5rem;
-  padding-bottom: .8rem;
-  border-bottom: 1px solid var(--border);
-}
-.settings-panel .close-btn {
-  position: absolute;
-  top: 1rem; right: 1rem;
-  background: none; border: none;
-  color: var(--muted); font-size: 1.3rem;
-  cursor: pointer;
-}
-.settings-panel .close-btn:hover { color: var(--text); }
-.settings-group {
-  margin-bottom: 1.5rem;
-  padding-bottom: 1.2rem;
-  border-bottom: 1px solid var(--border);
-}
-.settings-group:last-child { border-bottom: none; }
-.settings-group h3 {
-  font-size: .9rem;
-  color: var(--accent);
-  margin-bottom: .8rem;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-}
-.settings-group .hint {
-  font-size: .75rem;
-  color: var(--muted);
-  margin-top: -.5rem;
-  margin-bottom: .8rem;
-}
-.settings-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,.5);
-  z-index: 250;
-}
-.settings-overlay.active { display: block; }
-
-/* ── Toast ────────────────────────────────────────────────────── */
-.toast {
-  position: fixed;
-  top: 1rem; right: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  padding: .8rem 1.2rem;
-  border-radius: var(--radius-sm);
-  font-size: .9rem;
-  z-index: 999;
-  animation: slideIn .3s ease;
-}
-.toast.success { border-color: var(--green); color: var(--green); }
-.toast.error { border-color: var(--red); color: var(--red); }
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(100%); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-/* ── Empty State ──────────────────────────────────────────────── */
-.empty-state {
-  text-align: center;
-  padding: 3rem;
-  color: var(--muted);
-}
-.empty-state p { margin-top: .5rem; }
-
-/* ── Responsive ───────────────────────────────────────────────── */
-@media (max-width: 600px) {
-  .header { padding: 1rem; }
-  .container { padding: 1rem; }
-  .modal { padding: 1.5rem; }
-  .settings-panel { width: 100%; }
-}
-</style>
+<link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
 
+<!-- ── Setup Wizard (shown when not configured) ────────────────── -->
+<div class="setup-overlay" id="setupOverlay">
+  <div class="setup-card">
+    <div class="setup-header">
+      <h1>Hullucinator</h1>
+      <p class="setup-subtitle">AI E-Book Generator</p>
+    </div>
+
+    <div class="setup-intro">
+      <p>Welcome! Before you can generate books, configure your AI provider connection.</p>
+    </div>
+
+    <div class="setup-form">
+      <!-- Connection -->
+      <div class="setup-section">
+        <div class="section-icon">🔗</div>
+        <h3>Connection</h3>
+        <div class="field">
+          <label for="setupEndpoint">Endpoint URL</label>
+          <input id="setupEndpoint" type="url" placeholder="http://192.168.0.40:1234 or https://api.openai.com">
+        </div>
+        <div class="field">
+          <label for="setupApiKey">API Key</label>
+          <input id="setupApiKey" type="password" placeholder="Bearer token (if required)">
+          <span class="field-hint">Never saved to disk. Stored in memory only.</span>
+        </div>
+      </div>
+
+      <!-- Model -->
+      <div class="setup-section">
+        <div class="section-icon">🤖</div>
+        <h3>Writer Model</h3>
+        <div class="field">
+          <label for="setupModel">Model Name</label>
+          <div class="input-row">
+            <input id="setupModel" placeholder="e.g. qwen3.6-27b, gpt-4o, llama-3.1-70b">
+            <button class="btn btn-secondary btn-sm" id="fetchSetupModelsBtn" title="Fetch available models">
+              <span class="fetch-icon">↻</span> Fetch
+            </button>
+          </div>
+          <span class="field-hint">Leave blank to fetch from your provider.</span>
+        </div>
+        <div id="setupModelList" class="model-list" style="display:none"></div>
+      </div>
+
+      <!-- Reviewer (optional) -->
+      <div class="setup-section">
+        <div class="section-icon">📝</div>
+        <h3>Reviewer Model <span class="optional-badge">Optional</span></h3>
+        <div class="field">
+          <label for="setupReviewerEndpoint">Reviewer Endpoint</label>
+          <input id="setupReviewerEndpoint" type="url" placeholder="Leave empty to use writer endpoint">
+        </div>
+        <div class="field">
+          <label for="setupReviewerModel">Reviewer Model</label>
+          <div class="input-row">
+            <input id="setupReviewerModel" placeholder="Leave empty to use writer model">
+            <button class="btn btn-secondary btn-sm" id="fetchSetupReviewerModelsBtn" title="Fetch reviewer models">
+              <span class="fetch-icon">↻</span> Fetch
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Review Settings -->
+      <div class="setup-section">
+        <div class="section-icon">🔍</div>
+        <h3>Review Settings</h3>
+        <div class="field">
+          <label for="setupMaxTurns">Max Review Turns</label>
+          <select id="setupMaxTurns">
+            <option value="1">1 turn — quick review</option>
+            <option value="2" selected>2 turns — balanced</option>
+            <option value="3">3 turns — thorough</option>
+            <option value="4">4 turns — very thorough</option>
+            <option value="5">5 turns — exhaustive</option>
+          </select>
+          <span class="field-hint">Number of critique → correct cycles per book.</span>
+        </div>
+      </div>
+
+      <div class="setup-actions">
+        <button class="btn btn-primary btn-lg" id="setupSaveBtn">
+          Save & Start Creating
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Header ──────────────────────────────────────────────────── -->
-<header class="header">
+<header class="header" id="header">
   <h1>Hullucinator <span>AI E-Book Generator</span></h1>
   <div class="header-actions">
-    <button class="icon-btn" id="settingsBtn" title="AI Settings">⚙️</button>
+    <button class="icon-btn" id="settingsBtn" title="AI Settings">⚙</button>
   </div>
 </header>
 
 <!-- ── Main Content ────────────────────────────────────────────── -->
-<main class="container">
+<main class="container" id="mainContent">
+
   <!-- Create Book Form -->
   <div class="card" id="createCard">
-    <h2>✍️ Create New Book</h2>
+    <h2>Create New Book</h2>
     <form id="createForm">
+
       <label for="title">Book Title</label>
       <input id="title" placeholder="The Martian Garden" required>
 
@@ -427,35 +126,40 @@ select { cursor: pointer; appearance: auto; }
         <div id="tagBadges"></div>
       </div>
 
-      <label for="bookLength">Book Length</label>
-      <select id="bookLength">
-        <option value="short_story">Short Story (1 chapter, 1K–7.5K words)</option>
-        <option value="novella">Novella (3–5 chapters, 7.5K–20K words)</option>
-        <option value="novel" selected>Novel (8–15 chapters, 20K–50K words)</option>
-        <option value="epic">Epic (15–25 chapters, 50K+ words)</option>
-      </select>
+      <div class="form-row">
+        <div class="form-col">
+          <label for="bookLength">Book Length</label>
+          <select id="bookLength">
+            <option value="short_story">Short Story (1 chapter, 1K–7.5K words)</option>
+            <option value="novella">Novella (3–5 chapters, 7.5K–20K words)</option>
+            <option value="novel" selected>Novel (8–15 chapters, 20K–50K words)</option>
+            <option value="epic">Epic (15–25 chapters, 50K+ words)</option>
+          </select>
+        </div>
+        <div class="form-col">
+          <label for="maxTurns">Max Review Turns</label>
+          <select id="maxTurns">
+            <option value="1">1 turn (quick)</option>
+            <option value="2" selected>2 turns (default)</option>
+            <option value="3">3 turns (thorough)</option>
+            <option value="4">4 turns (very thorough)</option>
+            <option value="5">5 turns (exhaustive)</option>
+          </select>
+        </div>
+      </div>
 
-      <label for="maxTurns">Max Review Turns</label>
-      <select id="maxTurns">
-        <option value="1">1 turn (quick review)</option>
-        <option value="2" selected>2 turns (default)</option>
-        <option value="3">3 turns (thorough)</option>
-        <option value="4">4 turns (very thorough)</option>
-        <option value="5">5 turns (exhaustive)</option>
-      </select>
-
-      <div style="margin-top:1rem">
-        <button type="submit" class="btn btn-primary" id="createBtn">🚀 Generate Book</button>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="createBtn">Generate Book</button>
       </div>
     </form>
   </div>
 
   <!-- Library -->
   <div class="card">
-    <h2>📚 Your Library</h2>
+    <h2>Your Library</h2>
     <div id="booksList" class="book-list">
       <div class="empty-state">
-        <p style="font-size:2rem">📖</p>
+        <p class="empty-icon">📖</p>
         <p>No books yet. Create one above!</p>
       </div>
     </div>
@@ -464,7 +168,7 @@ select { cursor: pointer; appearance: auto; }
 
 <!-- ── Detail Modal ────────────────────────────────────────────── -->
 <div class="modal-overlay" id="detailOverlay">
-  <div class="modal" id="detailModal">
+  <div class="modal">
     <div class="modal-header">
       <h2 id="detailTitle"></h2>
       <button class="modal-close" id="detailClose">&times;</button>
@@ -473,495 +177,85 @@ select { cursor: pointer; appearance: auto; }
   </div>
 </div>
 
-<!-- ── Settings Panel ──────────────────────────────────────────── -->
+<!-- ── Settings Panel (slide-out, for already-configured users) ── -->
 <div class="settings-overlay" id="settingsOverlay"></div>
 <div class="settings-panel" id="settingsPanel">
   <button class="close-btn" id="settingsClose">&times;</button>
-  <h2>⚙️ AI Configuration</h2>
+  <h2>Configuration</h2>
 
   <!-- Writer Settings -->
   <div class="settings-group">
     <h3>Writer</h3>
-    <label for="cfgEndpoint">Endpoint URL</label>
-    <input id="cfgEndpoint" placeholder="http://192.168.0.40:1234">
 
-    <label for="cfgModel">Model</label>
-    <input id="cfgModel" placeholder="qwen3.6-27b">
+    <div class="field">
+      <label for="cfgEndpoint">Endpoint URL</label>
+      <input id="cfgEndpoint" type="url" placeholder="http://192.168.0.40:1234">
+    </div>
 
-    <label for="cfgApiKey">API Key</label>
-    <input id="cfgApiKey" type="password" placeholder="Optional — leave blank to use current">
-    <p class="hint">API key is never persisted to disk for security.</p>
+    <div class="field">
+      <label for="cfgWriterModel">Model</label>
+      <div class="input-row">
+        <input id="cfgWriterModel" placeholder="e.g. qwen3.6-27b">
+        <button class="btn btn-secondary btn-sm" id="fetchWriterModelsBtn" title="Fetch available models">
+          <span class="fetch-icon">↻</span> Fetch
+        </button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="cfgApiKey">API Key</label>
+      <input id="cfgApiKey" type="password" placeholder="Leave blank to keep current">
+      <span class="field-hint">Never persisted to disk.</span>
+    </div>
   </div>
 
   <!-- Reviewer Settings -->
   <div class="settings-group">
-    <h3>Reviewer</h3>
-    <label for="cfgReviewerEndpoint">Reviewer Endpoint URL</label>
-    <input id="cfgReviewerEndpoint" placeholder="Leave empty to use writer endpoint">
-    <p class="hint">Optional: use a different LLM for unbiased review.</p>
+    <h3>Reviewer <span class="optional-badge">Optional</span></h3>
 
-    <label for="cfgReviewerModel">Reviewer Model</label>
-    <input id="cfgReviewerModel" placeholder="Leave empty to use writer model">
-    <p class="hint">Optional: use a different model for review tasks.</p>
+    <div class="field">
+      <label for="cfgReviewerEndpoint">Endpoint URL</label>
+      <input id="cfgReviewerEndpoint" type="url" placeholder="Leave empty to use writer endpoint">
+    </div>
+
+    <div class="field">
+      <label for="cfgReviewerModel">Model</label>
+      <div class="input-row">
+        <input id="cfgReviewerModel" placeholder="Leave empty to use writer model">
+        <button class="btn btn-secondary btn-sm" id="fetchReviewerModelsBtn" title="Fetch reviewer models">
+          <span class="fetch-icon">↻</span> Fetch
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- Review Settings -->
   <div class="settings-group">
     <h3>Review</h3>
-    <label for="cfgMaxTurns">Max Review Turns (global default)</label>
-    <select id="cfgMaxTurns">
-      <option value="1">1 turn</option>
-      <option value="2" selected>2 turns</option>
-      <option value="3">3 turns</option>
-      <option value="4">4 turns</option>
-      <option value="5">5 turns</option>
-    </select>
-    <p class="hint">Maximum critique → correct iterations per book. Per-book setting overrides this.</p>
+    <div class="field">
+      <label for="cfgMaxTurns">Max Review Turns</label>
+      <select id="cfgMaxTurns">
+        <option value="1">1 turn</option>
+        <option value="2" selected>2 turns</option>
+        <option value="3">3 turns</option>
+        <option value="4">4 turns</option>
+        <option value="5">5 turns</option>
+      </select>
+      <span class="field-hint">Per-book setting overrides this default.</span>
+    </div>
   </div>
 
-  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-    <button class="btn btn-primary" id="saveConfigBtn">💾 Save Config</button>
-    <button class="btn btn-secondary" id="fetchModelsBtn">🔄 Fetch Models</button>
-  </div>
-  <div id="modelList" style="margin-top:1rem;font-size:.85rem;color:var(--muted);display:none"></div>
+  <button class="btn btn-primary" id="saveConfigBtn">Save Changes</button>
 </div>
 
+<!-- ── Scripts (order matters) ─────────────────────────────────── -->
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/app.js"></script>
+<script src="/static/js/settings.js"></script>
 <script>
-/* ── Constants & State ─────────────────────────────────────────── */
-const API = '/api';
-let tags = [];
-let pollingInterval = null;
-let currentBookId = null;
-
-/* ── Helpers ───────────────────────────────────────────────────── */
-const $ = id => document.getElementById(id);
-
-async function apiFetch(path, opts = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-  const resp = await fetch(API + path, { ...opts, headers });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail || resp.statusText);
-  }
-  return resp.json();
-}
-
-function toast(msg, type = '') {
-  const t = document.createElement('div');
-  t.className = 'toast ' + type;
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
-}
-
-function statusBadge(status) {
-  const cls = {
-    pending: 'badge-pending',
-    summary_generated: 'badge-summary_generated',
-    outline_generated: 'badge-outline_generated',
-    in_progress: 'badge-in_progress',
-    completed: 'badge-completed',
-    reviewing: 'badge-reviewing',
-    reviewed: 'badge-reviewed',
-    failed: 'badge-failed',
-  };
-  return `<span class="badge ${cls[status] || 'badge-pending'}">${status.replace(/_/g,' ')}</span>`;
-}
-
-function tagBadgesHTML() {
-  return tags.map((t, i) =>
-    `<span class="tag-badge">${t}<button data-idx="${i}">&times;</button></span>`
-  ).join('');
-}
-
-/* ── Toast Event Listener ──────────────────────────────────────── */
-document.body.addEventListener('click', e => {
-  const btn = e.target.closest('.tag-badge button');
-  if (btn) {
-    tags.splice(+btn.dataset.idx, 1);
-    $('tagBadges').innerHTML = tagBadgesHTML();
-  }
-});
-
-/* ── Tag Input ─────────────────────────────────────────────────── */
-$('tagInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.value.trim()) {
-    e.preventDefault();
-    const tag = e.target.value.trim();
-    if (!tags.includes(tag)) {
-      tags.push(tag);
-      $('tagBadges').innerHTML = tagBadgesHTML();
-    }
-    e.target.value = '';
-  }
-});
-
-/* ── Create Book ───────────────────────────────────────────────── */
-$('createForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  const btn = $('createBtn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Queuing...';
-
-  try {
-    const data = await apiFetch('/books/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: $('title').value.trim(),
-        prompt: $('prompt').value.trim(),
-        tags: tags,
-        length: $('bookLength').value,
-        review_max_turns: parseInt($('maxTurns').value),
-      }),
-    });
-    toast('Book "' + data.book_id.slice(0,8) + '..." queued!', 'success');
-    $('title').value = '';
-    $('prompt').value = '';
-    tags = [];
-    $('tagBadges').innerHTML = '';
-    loadBooks();
-  } catch (err) {
-    toast('Error: ' + err.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🚀 Generate Book';
-  }
-});
-
-/* ── Load Book List ────────────────────────────────────────────── */
-async function loadBooks() {
-  try {
-    const books = await apiFetch('/books');
-    const list = $('booksList');
-
-    if (!books.length) {
-      list.innerHTML = '<div class="empty-state"><p style="font-size:2rem">📖</p><p>No books yet. Create one above!</p></div>';
-      return;
-    }
-
-    list.innerHTML = books.map(b => {
-      const p = b.progress || {};
-      const pct = p.percentage || 0;
-      const isDone = b.status === 'completed' || b.status === 'reviewed';
-      const isFail = b.status === 'failed';
-      const pClass = isDone ? 'complete' : isFail ? 'fail' : '';
-
-      let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${t}</span>`).join('');
-      let lengthBadge = b.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue)">${b.length}</span>` : '';
-
-      return `
-        <div class="book-card" data-id="${b.id}" onclick="openDetail('${b.id}')">
-          <div class="book-title">${esc(b.title)}</div>
-          <div class="book-meta">
-            ${statusBadge(b.status)}
-            ${lengthBadge}
-            ${tagsHtml}
-          </div>
-          <div class="book-prompt">${esc(b.prompt)}</div>
-          ${pct > 0 ? `<div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>` : ''}
-          ${p.current_step && p.current_step !== b.status ? `<small style="color:var(--muted)">${esc(p.current_step)}</small>` : ''}
-        </div>
-      `;
-    }).join('');
-  } catch (err) {
-    console.error('loadBooks error:', err);
-  }
-}
-
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
-}
-
-/* ── Detail Modal ──────────────────────────────────────────────── */
-async function openDetail(bookId) {
-  currentBookId = bookId;
-  try {
-    const book = await apiFetch('/books/' + bookId);
-    $('detailTitle').textContent = book.title;
-
-    let html = '';
-
-    // Status & Metadata
-    html += `<div class="modal-section">
-      <h3>Status</h3>
-      <p>${statusBadge(book.status)}</p>
-      ${book.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue);margin-left:.5rem">${book.length}</span>` : ''}
-      ${(book.tags||[]).map(t => `<span class="tag-badge" style="margin-left:.3rem">${t}</span>`).join('')}
-      ${book.review_max_turns ? `<span style="margin-left:.5rem;color:var(--muted);font-size:.85rem">Max review turns: ${book.review_max_turns}</span>` : ''}
-    </div>`;
-
-    // Progress bar
-    if (book.progress) {
-      const p = book.progress;
-      const pct = p.percentage || 0;
-      const isDone = book.status === 'completed' || book.status === 'reviewed';
-      const isFail = book.status === 'failed';
-      const pClass = isDone ? 'complete' : isFail ? 'fail' : '';
-      html += `<div class="modal-section">
-        <h3>Progress</h3>
-        <div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>
-        <p style="margin-top:.3rem;font-size:.85rem">${esc(p.current_step || book.status)} (${pct}%)</p>
-        ${p.total_chapters ? `<small style="color:var(--muted)">Chapters: ${p.chapters_completed||0}/${p.total_chapters}</small>` : ''}
-        ${p.error ? `<p style="color:var(--red);margin-top:.3rem">Error: ${esc(p.error)}</p>` : ''}
-      </div>`;
-    }
-
-    // Summary
-    if (book.summary) {
-      html += `<div class="modal-section"><h3>Summary</h3><pre>${esc(book.summary)}</pre></div>`;
-    }
-
-    // Outline
-    if (book.outline && book.outline.length) {
-      html += `<div class="modal-section"><h3>Outline</h3><ol>${book.outline.map(c => `<li>${esc(c)}</li>`).join('')}</ol></div>`;
-    }
-
-    // Chapters
-    if (book.chapters) {
-      const entries = Object.entries(book.chapters);
-      html += `<div class="modal-section"><h3>Chapters (${entries.length})</h3>`;
-      for (const [title, content] of entries) {
-        const preview = content.substring(0, 200) + (content.length > 200 ? '...' : '');
-        html += `<details style="margin-bottom:.5rem"><summary style="cursor:pointer;font-weight:600;color:var(--text)">${esc(title)}</summary>
-          <pre style="margin-top:.3rem">${esc(content)}</pre></details>`;
-      }
-      html += `</div>`;
-    }
-
-    // Review Section
-    if (book.review) {
-      html += buildReviewSection(book.review, book.review_history);
-    }
-
-    // Actions
-    html += `<div class="modal-section" style="display:flex;gap:.5rem;flex-wrap:wrap">`;
-    if (book.status === 'completed' || book.status === 'reviewed') {
-      html += `<a class="btn btn-primary btn-sm" href="${API}/books/${bookId}/export/epub">📥 Download EPUB</a>`;
-      html += `<a class="btn btn-secondary btn-sm" href="${API}/books/${bookId}/export/pdf">📥 Download PDF</a>`;
-    }
-    if (book.status === 'completed') {
-      html += `<button class="btn btn-secondary btn-sm" onclick="triggerReview('${bookId}')">🔍 Trigger Review</button>`;
-    }
-    if (book.status === 'failed') {
-      html += `<button class="btn btn-secondary btn-sm" onclick="retryBook('${bookId}')">🔄 Retry</button>`;
-    }
-    html += `</div>`;
-
-    $('detailContent').innerHTML = html;
-    $('detailOverlay').classList.add('active');
-
-    // Poll for progress if still in progress
-    if (['pending','summary_generated','outline_generated','in_progress','reviewing'].includes(book.status)) {
-      startPolling();
-    }
-  } catch (err) {
-    toast('Error loading book: ' + err.message, 'error');
-  }
-}
-
-function buildReviewSection(review, history) {
-  let html = `<div class="review-section">`;
-  html += `<h3>📝 Review Results</h3>`;
-
-  const score = review.overall_score ?? 0;
-  const verdict = review.verdict || 'unknown';
-  const scoreClass = score >= 7 ? 'good' : score >= 4 ? 'ok' : 'bad';
-  const passClass = verdict === 'ready' ? 'passed' : 'failed';
-
-  html += `<div class="review-score ${scoreClass}">${score}/10</div>`;
-  html += `<div class="review-verdict ${passClass}">${verdict === 'ready' ? '✅ Approved' : '❌ Needs Revision'}</div>`;
-
-  if (review.max_turns_reached) {
-    html += `<p style="color:var(--orange);text-align:center;font-size:.85rem;margin-bottom:.5rem">
-      ⚠️ Max turns reached — some issues may remain</p>`;
-  }
-
-  if (review.critique) {
-    html += `<details style="margin-top:.5rem"><summary style="cursor:pointer;color:var(--muted);font-size:.85rem">View Full Critique</summary>
-      <div class="review-critique">${esc(review.critique)}</div></details>`;
-  }
-
-  // Correction audit trail
-  if (review.corrections && review.corrections.length) {
-    html += `<h4 style="margin-top:.8rem;font-size:.9rem;color:var(--text)">Corrections Applied</h4>`;
-    for (const c of review.corrections) {
-      html += `<div class="correction-item">
-        <span class="corr-chapter">${esc(c.chapter)}</span>
-        <span class="corr-type">[${c.issue_type}]</span>
-        <div style="margin-top:.2rem;font-size:.8rem;color:var(--muted)">${esc(c.issue_description)}</div>
-      </div>`;
-    }
-  }
-
-  // Iteration history
-  if (history && history.length > 1) {
-    html += `<h4 style="margin-top:1rem;font-size:.9rem;color:var(--text)">Review History (${history.length} turns)</h4>`;
-    for (const turn of history) {
-      const tScore = turn.overall_score ?? '?';
-      const tVerdict = turn.verdict || '?';
-      const tScoreClass = tScore >= 7 ? 'good' : tScore >= 4 ? 'ok' : 'bad';
-      html += `<div style="background:var(--surface);padding:.5rem .7rem;border-radius:6px;margin-bottom:.3rem;font-size:.85rem">
-        <strong>Turn ${turn.turn}</strong>: Score <span class="review-score ${tScoreClass}" style="font-size:1rem;display:inline">${tScore}/10</span>
-        — <span class="review-verdict ${tVerdict==='ready'?'passed':'failed'}" style="font-size:.85rem">${tVerdict}</span>
-        ${turn.corrections && turn.corrections.length ? `(${turn.corrections.length} corrections)` : ''}
-      </div>`;
-    }
-  }
-
-  html += `</div>`; // close review-section
-  return html;
-}
-
-/* ── Modal Close ───────────────────────────────────────────────── */
-$('detailClose').addEventListener('click', closeModal);
-$('detailOverlay').addEventListener('click', e => {
-  if (e.target === $('detailOverlay')) closeModal();
-});
-function closeModal() {
-  $('detailOverlay').classList.remove('active');
-  stopPolling();
-  currentBookId = null;
-}
-
-/* ── Progress Polling ──────────────────────────────────────────── */
-function startPolling() {
-  stopPolling();
-  pollingInterval = setInterval(async () => {
-    if (!currentBookId) return;
-    try {
-      const book = await apiFetch('/books/' + currentBookId);
-      const isDone = ['completed','reviewed','failed'].includes(book.status);
-
-      // Update progress bar in modal
-      const pBar = $('detailContent').querySelector('.progress-fill');
-      if (pBar) {
-        pBar.style.width = (book.progress?.percentage || 0) + '%';
-        pBar.className = 'progress-fill ' + (book.status === 'failed' ? 'fail' : book.status === 'reviewed' ? 'complete' : '');
-      }
-      const pText = $('detailContent').querySelector('.progress-bar + p');
-      if (pText) pText.textContent = `${esc(book.progress?.current_step || book.status)} (${book.progress?.percentage || 0}%)`;
-
-      // Update list card
-      loadBooks();
-
-      if (isDone) {
-        stopPolling();
-        // Re-open detail to show final state
-        openDetail(currentBookId);
-        toast('Book generation complete!', book.status === 'failed' ? 'error' : 'success');
-      }
-    } catch (err) {
-      console.error('poll error:', err);
-    }
-  }, 3000);
-}
-function stopPolling() {
-  if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
-}
-
-/* ── Trigger Review ────────────────────────────────────────────── */
-async function triggerReview(bookId) {
-  try {
-    const res = await apiFetch('/books/' + bookId + '/review', { method: 'POST' });
-    toast('Review started (max ' + res.max_turns + ' turns)', 'success');
-    closeModal();
-    loadBooks();
-    openDetail(bookId);
-  } catch (err) {
-    toast('Review error: ' + err.message, 'error');
-  }
-}
-
-/* ── Retry Book ────────────────────────────────────────────────── */
-async function retryBook(bookId) {
-  if (!confirm('Restart generation for this book?')) return;
-  try {
-    const book = await apiFetch('/books/' + bookId);
-    const res = await apiFetch('/books/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: book.title,
-        prompt: book.prompt,
-        tags: book.tags || [],
-        length: book.length || 'novel',
-        review_max_turns: book.review_max_turns || 2,
-      }),
-    });
-    toast('New book queued!', 'success');
-    closeModal();
-    loadBooks();
-  } catch (err) {
-    toast('Error: ' + err.message, 'error');
-  }
-}
-
-/* ── Settings Panel ────────────────────────────────────────────── */
-$('settingsBtn').addEventListener('click', () => {
-  $('settingsPanel').classList.add('active');
-  $('settingsOverlay').classList.add('active');
-  loadConfig();
-});
-$('settingsClose').addEventListener('click', closeSettings);
-$('settingsOverlay').addEventListener('click', closeSettings);
-function closeSettings() {
-  $('settingsPanel').classList.remove('active');
-  $('settingsOverlay').classList.remove('active');
-}
-
-async function loadConfig() {
-  try {
-    const cfg = await apiFetch('/config');
-    $('cfgEndpoint').value = cfg.endpoint_url || '';
-    $('cfgModel').value = cfg.model_name || '';
-    $('cfgApiKey').value = '';  // never display saved key
-    $('cfgReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
-    $('cfgReviewerModel').value = cfg.reviewer_model_name || '';
-    $('cfgMaxTurns').value = cfg.review_max_turns || 2;
-  } catch (err) {
-    console.error('loadConfig error:', err);
-  }
-}
-
-$('saveConfigBtn').addEventListener('click', async () => {
-  try {
-    const cfg = {
-      endpoint_url: $('cfgEndpoint').value.trim() || null,
-      model_name: $('cfgModel').value.trim() || null,
-      api_key: $('cfgApiKey').value.trim() || null,
-      reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || null,
-      reviewer_model_name: $('cfgReviewerModel').value.trim() || null,
-      review_max_turns: parseInt($('cfgMaxTurns').value),
-    };
-    await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
-    toast('Configuration saved!', 'success');
-    closeSettings();
-  } catch (err) {
-    toast('Save error: ' + err.message, 'error');
-  }
-});
-
-$('fetchModelsBtn').addEventListener('click', async () => {
-  try {
-    const res = await apiFetch('/models');
-    const list = $('modelList');
-    if (res.models.length) {
-      list.style.display = 'block';
-      list.innerHTML = '<strong>Available models:</strong><br>' +
-        res.models.map(m => `${m.id}${m.id === res.current_model ? ' ← current' : ''}`).join('<br>');
-    } else {
-      list.style.display = 'block';
-      list.innerHTML = '<span style="color:var(--orange)">No models found. Check endpoint URL.</span>';
-    }
-  } catch (err) {
-    toast('Model fetch error: ' + err.message, 'error');
-  }
-});
-
-/* ── Init ──────────────────────────────────────────────────────── */
-loadBooks();
-setInterval(loadBooks, 10000);
+  /* Boot the app — checks config, shows setup wizard if needed */
+  initApp();
+  initSettings();
 </script>
 </body>
 </html>

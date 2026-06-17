@@ -57,7 +57,8 @@ The built-in web interface provides:
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
 | `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model, max review turns). Persisted to `data/config.json` (no API keys). |
-| `GET` | `/api/models` | List available models from LLM provider |
+| `GET` | `/api/models` | List available models from writer's LLM provider |
+| `GET` | `/api/reviewer/models` | List available models from reviewer's LLM provider |
 | `POST` | `/api/books/create` | Create a new book (background generation) |
 | `GET` | `/api/books` | List all books |
 | `GET` | `/api/books/{book_id}` | Get book status and content |
@@ -209,7 +210,13 @@ hullucinator/
 │   ├── orchestrator.py  # Generation pipeline with chapter continuity + iterative review loop
 │   └── exporter.py      # EPUB & PDF export (configurable fonts, review metadata)
 ├── static/
-│   └── index.html       # Polished web interface with settings panel
+│   ├── css/
+│   │   └── styles.css   # All styles (variables, components, responsive)
+│   ├── js/
+│   │   ├── ui.js        # Shared utilities (apiFetch, toast, polling, escaping)
+│   │   ├── app.js       # Main app (create form, library, detail modal, review section)
+│   │   └── settings.js  # Settings panel (writer/reviewer config, model fetch)
+│   └── index.html       # Clean HTML skeleton (links CSS/JS, defines DOM structure)
 ├── data/
 │   ├── books/           # Generated books stored as JSON files
 │   └── config.json      # Persisted AI config (endpoint URLs, model names, max turns — no API keys)
