@@ -89,12 +89,14 @@ async function loadConfig() {
 
 async function saveConfig() {
   try {
+    // (M7 fix: send empty string "" instead of null for cleared fields
+    // so the server can properly clear persisted values)
     const cfg = {
-      endpoint_url: $('cfgEndpoint').value.trim() || null,
-      model_name: $('cfgWriterModel').value.trim() || null,
-      api_key: $('cfgApiKey').value.trim() || null,
-      reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || null,
-      reviewer_model_name: $('cfgReviewerModel').value.trim() || null,
+      endpoint_url: $('cfgEndpoint').value.trim() || '',
+      model_name: $('cfgWriterModel').value.trim() || '',
+      api_key: $('cfgApiKey').value.trim() || '',
+      reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || '',
+      reviewer_model_name: $('cfgReviewerModel').value.trim() || '',
       review_max_turns: parseInt($('cfgMaxTurns').value),
     };
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });

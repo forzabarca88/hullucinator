@@ -12,11 +12,19 @@ from pathlib import Path
 
 import ebooklib
 from ebooklib import epub
-from fpdf.fpdf import FPDF
+from fpdf import FPDF, XPos, YPos
 
 from app.storage import EXPORTS_DIR, ensure_exports_dir
 
 logger = logging.getLogger(__name__)
+
+# (H6) Use the `markdown` library for robust HTML conversion
+try:
+    import markdown as markdown_lib
+    HAS_MARKDOWN_LIB = True
+except ImportError:
+    HAS_MARKDOWN_LIB = False
+    logger.warning("'markdown' library not installed. Using regex fallback. Install with: pip install markdown")
 
 # ── PDF Font Configuration ──────────────────────────────────────────────
 
@@ -46,12 +54,20 @@ _check_fonts()
 # ── Markdown → HTML converter ──────────────────────────────────────────
 
 def markdown_to_html(text: str) -> str:
-    """Convert markdown-formatted text to clean, semantic HTML."""
-    # Escape HTML entities first
+    """Convert markdown-formatted text to clean, semantic HTML.
+    
+    (H6 fix: uses the `markdown` library when available for robust conversion,
+    falls back to regex-based parser for basic compatibility.)
+    """
+    if HAS_MARKDOWN_LIB:
+        extensions = ['tables', 'fenced_code', 'codehilite']
+        return markdown_lib.markdown(text, extensions=extensions)
+    
+    # Regex fallback (kept for compatibility when markdown lib is unavailable)
     text = html_lib.escape(text)
 
     # Horizontal rules (--- or ***)
-    text = re.sub(r'^(\s*[-*_]){3,}\s*$', '<hr>', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*[-*_]{3,}\s*$', '<hr>', text, flags=re.MULTILINE)
 
     # Headings (# ## ###) — order matters: longest first
     text = re.sub(r'^###\s+(.+)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
@@ -128,6 +144,8 @@ def markdown_to_html(text: str) -> str:
             html_parts.append(f'<p>{formatted}</p>')
 
     return '\n'.join(html_parts)
+
+
 
 
 # ── EPUB CSS ────────────────────────────────────────────────────────────
@@ -265,14 +283,11 @@ def export_to_epub(
     # Add genre/theme tags as EPUB subjects
     if tags:
         for tag in tags:
-            subject = epub.EpubMeta()
-            subject.name = 'subject'
-            subject.content = tag
-            book.add_metadata('OPF', 'subject', [tag])
+            book.add_metadata('OPF', 'subject', tag, {})
 
-    # CSS stylesheet
+    # CSS stylesheet (M8 fix: unique UID to avoid collision with book identifier)
     style = epub.EpubItem(
-        uid=book_id,
+        uid='style_default_css',
         file_name='style/default.css',
         media_type='text/css',
         content=EPUB_CSS.encode('utf-8')
@@ -321,8 +336,7 @@ def export_to_epub(
     epub.write_epub(str(epub_path), book, {})
     return str(epub_path)
 
-
-# ── PDF Export ──────────────────────────────────────────────────────────
+# —— PDF Export —————————————————————————————————————————————————
 
 def export_to_pdf(
     book_id: str,
@@ -332,7 +346,11 @@ def export_to_pdf(
     output_dir: str = None,
     review: dict = None,
 ):
-    """Export a book to PDF format. Returns the absolute path to the file."""
+    """Export a book to PDF format. Returns the absolute path to the file.
+    
+    (H7 fix: enhanced formatting with proper page layout, chapter separators,
+    and improved font handling.)
+    """
     if output_dir is None:
         output_dir = str(EXPORTS_DIR)
 
@@ -340,46 +358,68 @@ def export_to_pdf(
     pdf.add_page()
 
     # Register fonts (with error handling for missing fonts)
+    fonts_registered = False
     try:
-        pdf.add_font("DejaVu", "", FONT_PATHS["DejaVu"], uni=True)
-        pdf.add_font("DejaVu", "B", FONT_PATHS["DejaVu-Bold"], uni=True)
-        pdf.add_font("DejaVuMono", "", FONT_PATHS["DejaVuMono"], uni=True)
-        pdf.add_font("DejaVuMono", "B", FONT_PATHS["DejaVuMono-Bold"], uni=True)
+        pdf.add_font("DejaVu", "", FONT_PATHS["DejaVu"])
+        pdf.add_font("DejaVu", "B", FONT_PATHS["DejaVu-Bold"])
+        pdf.add_font("DejaVuMono", "", FONT_PATHS["DejaVuMono"])
+        pdf.add_font("DejaVuMono", "B", FONT_PATHS["DejaVuMono-Bold"])
+        fonts_registered = True
     except Exception as e:
-        logger.error("Font registration failed: %s. Falling back to Helvetica.", e)
-        # Fallback to built-in Helvetica if DejaVu fonts are missing
-        pdf.add_font("DejaVu", "", "", uni=False)
-        pdf.add_font("DejaVu", "B", "", uni=False)
-        pdf.add_font("DejaVuMono", "", "", uni=False)
-        pdf.add_font("DejaVuMono", "B", "", uni=False)
+        logger.error("Font registration failed: %s. Falling back to built-in fonts.", e)
 
-    # Title page
-    pdf.set_font("DejaVu", "B", 18)
-    pdf.cell(200, 12, txt=title, ln=True, align='C')
-    pdf.ln(4)
+    # Use appropriate font family name
+    font_family = "DejaVu" if fonts_registered else "Helvetica"
+    font_mono = "DejaVuMono" if fonts_registered else "Courier"
+
+    # Title page with decorative border
+    pdf.set_font(font_family, "B", 20)
+    pdf.ln(30)
+    pdf.cell(200, 15, text=title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.ln(6)
+    
+    # Decorative line
+    pdf.set_draw_color(100, 100, 100)
+    pdf.set_line_width(0.5)
+    pdf.line(50, pdf.get_y(), 150, pdf.get_y())
+    pdf.ln(10)
+    
     if tags:
-        pdf.set_font("DejaVu", size=11)
-        pdf.cell(200, 7, txt=", ".join(tags), ln=True, align='C')
+        pdf.set_font(font_family, "", 12)
+        pdf.cell(200, 8, text=", ".join(tags), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        pdf.ln(4)
+    
     if review:
         score = review.get('overall_score', '')
         verdict = review.get('verdict', '')
         corrections = review.get('corrections', [])
-        pdf.ln(2)
-        pdf.set_font("DejaVu", size=9)
+        pdf.set_font(font_family, "", 10)
         if score:
-            pdf.cell(200, 6, txt=f'Reviewed: {score}/10 ({verdict})', ln=True, align='C')
+            verdict_display = "Approved" if verdict == "ready" else "Needs Revision"
+            pdf.cell(200, 7, text=f'Review Score: {score}/10 ({verdict_display})', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
         if corrections:
-            pdf.cell(200, 6, txt=f'{len(corrections)} correction(s) applied', ln=True, align='C')
+            pdf.cell(200, 7, text=f'{len(corrections)} correction(s) applied during review', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    
+    # Decorative line at bottom
     pdf.ln(10)
+    pdf.line(50, pdf.get_y(), 150, pdf.get_y())
 
+    # Chapter pages
     for c_title, content in chapters.items():
         pdf.add_page()
-        # Chapter heading
-        pdf.set_font("DejaVu", "B", 14)
-        pdf.cell(200, 10, txt=c_title, ln=True, align='L')
-        pdf.ln(4)
+        
+        # Chapter heading with decorative underline
+        pdf.set_font(font_family, "B", 16)
+        pdf.cell(200, 12, text=c_title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        pdf.ln(2)
+        
+        # Underline for chapter title
+        pdf.set_draw_color(150, 150, 150)
+        pdf.set_line_width(0.3)
+        pdf.line(25, pdf.get_y(), 175, pdf.get_y())
+        pdf.ln(8)
 
-        # Body text — strip markdown for PDF
+        # Body text — strip markdown formatting for PDF
         clean = content
         clean = re.sub(r'^#+\s+', '', clean, flags=re.MULTILINE)
         clean = re.sub(r'\*\*(.+?)\*\*', r'\1', clean)
@@ -388,9 +428,10 @@ def export_to_pdf(
         clean = re.sub(r'^\s*[-*]\s+', '', clean, flags=re.MULTILINE)
         clean = re.sub(r'^(\s*[-*_]){3,}\s*$', '', clean, flags=re.MULTILINE)
 
-        pdf.set_font("DejaVu", size=11)
-        pdf.multi_cell(0, 5.5, txt=clean)
-        pdf.ln(3)
+        pdf.set_font(font_family, "", 11)
+        pdf.set_text_color(30, 30, 30)
+        pdf.multi_cell(0, 6, text=clean)
+        pdf.ln(4)
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

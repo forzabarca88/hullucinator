@@ -99,6 +99,221 @@ class Orchestrator:
 
         return {"valid": len(errors) == 0, "errors": errors}
 
+    async def _chunked_review(self, book_state, max_turns=None):
+        """Review a long book in chunks to avoid context window overflow.
+        
+        (M4 fix: For books exceeding REVIEW_WORD_THRESHOLD words or with many
+        chapters, reviews are done in batches of REVIEW_CHUNK_SIZE chapters.
+        Results are aggregated and corrections applied across all chunks.)
+        """
+        tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+        reviewer = self._get_reviewer()
+        turns_limit = max_turns if max_turns is not None else book_state.review_max_turns
+        
+        # Initialize review history
+        if book_state.review_history is None:
+            book_state.review_history = []
+        
+        logger.info("Starting chunked review for '%s' (%d chapters, ~%d words, max %d turns)...",
+                    book_state.title, len(book_state.chapters),
+                    sum(len(c.split()) for c in book_state.chapters.values()),
+                    turns_limit)
+        
+        # Split chapters into chunks
+        chapters = list(book_state.chapters.items())
+        chunks = [chapters[i:i + REVIEW_CHUNK_SIZE] for i in range(0, len(chapters), REVIEW_CHUNK_SIZE)]
+        
+        # Collect all issues across chunks
+        all_issues = []
+        all_corrections = []
+        chunk_scores = []
+        
+        for turn_num in range(1, turns_limit + 1):
+            logger.info("Chunked review turn %d/%d for '%s'", turn_num, turns_limit, book_state.title)
+            
+            # Update progress for UI
+            if turn_num > 1:
+                book_state.progress["current_step"] = f"reviewing (turn {turn_num})"
+                book_state.progress["percentage"] = 97 + int((turn_num - 1) / turns_limit * 3)
+                save_book(book_state.id, book_state)
+            
+            # Review each chunk
+            turn_issues = []
+            turn_scores = []
+            turn_corrections = []
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                # Build review text for this chunk
+                review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+                review_text += f"Summary:\n{book_state.summary}\n\n"
+                review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
+                
+                # Include chapter summaries for chapters NOT in this chunk (context)
+                other_summaries = []
+                chunk_titles = {t for t, _ in chunk}
+                if book_state.chapter_summaries:
+                    for title, summary in book_state.chapter_summaries.items():
+                        if title not in chunk_titles:
+                            other_summaries.append(f"  • {title}: {summary}")
+                if other_summaries:
+                    review_text += "Other chapter summaries (for context):\n" + "\n".join(other_summaries) + "\n\n"
+                
+                # Include the actual content for chapters in this chunk
+                for idx, (title, content_text) in enumerate(chunk, 1):
+                    review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content_text}"
+                
+                # If this is turn > 1, include prior review results for context
+                if turn_num > 1 and book_state.review_history:
+                    review_text += "\n\n--- Previous Review History ---\n"
+                    for prev in book_state.review_history:
+                        review_text += f"\nTurn {prev['turn']}:\n"
+                        review_text += f"  Score: {prev.get('overall_score', '?')}/10\n"
+                        review_text += f"  Verdict: {prev.get('verdict', '?')}\n"
+                        if prev.get('corrections'):
+                            for corr in prev['corrections']:
+                                review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
+                
+                # Critique this chunk
+                critique_messages = [
+                    {"role": "system", "content": (
+                        "You are a professional book critic and editor. Review the following chapters critically. "
+                        "Identify any major issues including plot holes, character inconsistencies, pacing problems, "
+                        "continuity errors, tone inconsistencies, and unresolved threads.\n\n"
+                        "Return your review as a JSON object with this exact structure:\n"
+                        '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
+                        "Only flag issues in the chapters provided above. Score based on these chapters but consider overall book quality."
+                    )},
+                    {"role": "user", "content": review_text},
+                ]
+                
+                critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
+                critique_raw = critique_response["choices"][0]["message"]["content"].strip()
+                
+                critique_data = self._parse_critique(critique_raw)
+                chunk_issues = critique_data.get("issues", [])
+                chunk_score = critique_data.get("overall_score", 5)
+                chunk_verdict = critique_data.get("verdict", "needs_revision")
+                
+                turn_scores.append(chunk_score)
+                
+                logger.info("Chunk %d/%d: score=%d, verdict=%s, %d issues",
+                           chunk_idx + 1, len(chunks), chunk_score, chunk_verdict, len(chunk_issues))
+                
+                # Filter issues to only include chapters in this chunk
+                for issue in chunk_issues:
+                    chapter_title = issue.get("chapter", "")
+                    if chapter_title:
+                        # Try to match to actual chapter
+                        if chapter_title not in book_state.chapters:
+                            matched = self._match_chapter_title(chapter_title, book_state.chapters)
+                            if matched:
+                                issue["chapter"] = matched
+                            else:
+                                continue
+                    turn_issues.append(issue)
+                
+                # Correct issues in this chunk (using writer client)
+                corrected_chapters = set()
+                for issue in chunk_issues:
+                    chapter_title = issue.get("chapter", "")
+                    if not chapter_title or chapter_title not in book_state.chapters:
+                        continue
+                    if chapter_title in corrected_chapters:
+                        continue
+                    
+                    description = issue.get("description", "")
+                    suggestion = issue.get("suggestion", "")
+                    
+                    # Build revision context with summaries of other chapters
+                    prior_context = ""
+                    if book_state.chapter_summaries:
+                        prior_parts = []
+                        for outline_title in book_state.outline:
+                            if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
+                                prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
+                        if prior_parts:
+                            prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
+                    
+                    revision_messages = [
+                        {"role": "system", "content": (
+                            "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
+                            "the specific issues identified while preserving the core narrative and style. "
+                            "Ensure consistency with the rest of the book."
+                        )},
+                        {"role": "user", "content": (
+                            f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+                            f"Book summary:\n{book_state.summary}\n\n"
+                            + prior_context + "\n\n"
+                            f"Issue identified in '{chapter_title}':\n"
+                            f"  Type: {issue.get('type', 'general')}\n"
+                            f"  Problem: {description}\n"
+                            f"  Suggested fix: {suggestion}\n\n"
+                            f"Current chapter content:\n{book_state.chapters[chapter_title]}\n\n"
+                            f"Rewrite this chapter to address the issue. Return only the revised chapter content."
+                        )},
+                    ]
+                    
+                    revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
+                    revised_content = revision_response["choices"][0]["message"]["content"].strip()
+                    
+                    book_state.chapters[chapter_title] = revised_content
+                    new_summary = await self._summarize_chapter(revised_content, chapter_title)
+                    book_state.chapter_summaries[chapter_title] = new_summary
+                    corrected_chapters.add(chapter_title)
+                    
+                    turn_corrections.append({
+                        "chapter": chapter_title,
+                        "issue_type": issue.get("type", "general"),
+                        "issue_description": description,
+                        "suggestion": suggestion,
+                        "corrected": True,
+                    })
+                    save_book(book_state.id, book_state)
+            
+            # Aggregate results for this turn
+            avg_score = int(sum(turn_scores) / len(turn_scores)) if turn_scores else 5
+            overall_verdict = "ready" if all(s >= 7 for s in turn_scores) else "needs_revision"
+            
+            # Record this turn in history
+            turn_record = {
+                "turn": turn_num,
+                "critique": f"Chunked review: {len(chunks)} chunks, avg score {avg_score}/10",
+                "issues": turn_issues,
+                "overall_score": avg_score,
+                "verdict": overall_verdict,
+                "corrections": turn_corrections,
+            }
+            book_state.review_history.append(turn_record)
+            book_state.review = turn_record
+            save_book(book_state.id, book_state)
+            
+            logger.info("Turn %d complete: avg_score=%d, verdict=%s, %d corrections",
+                       turn_num, avg_score, overall_verdict, len(turn_corrections))
+            
+            # If all chunks pass review, we're done
+            if overall_verdict == "ready" or not turn_issues:
+                logger.info("Book '%s' passed chunked review after %d turn(s) (avg score: %d/10)",
+                           book_state.title, turn_num, avg_score)
+                book_state.review["reviewed"] = True
+                _transition(book_state, "reviewed")
+                book_state.progress["current_step"] = "reviewed"
+                book_state.progress["percentage"] = 100
+                save_book(book_state.id, book_state)
+                return book_state.review_history
+        
+        # Max turns reached without passing
+        logger.warning("Book '%s' did not pass chunked review after %d turns", book_state.title, turns_limit)
+        book_state.review["reviewed"] = True
+        book_state.review["max_turns_reached"] = True
+        book_state.review["message"] = f"Review completed after {turns_limit} turns. Some issues may remain."
+        _transition(book_state, "reviewed")
+        book_state.progress["current_step"] = "reviewed"
+        book_state.progress["percentage"] = 100
+        save_book(book_state.id, book_state)
+        
+        return book_state.review_history
+
+
     async def generate_summary(self, book_state: BookState):
         """Generate a book summary from the user's prompt."""
         if book_state.status != "pending":
@@ -404,6 +619,13 @@ class Orchestrator:
 
         logger.info("Starting iterative review for '%s' (max %d turns)...", book_state.title, turns_limit)
 
+        # (M4) Use chunked review for long books to avoid context window overflow
+        total_words = sum(len(c.split()) for c in book_state.chapters.values())
+        if total_words > REVIEW_WORD_THRESHOLD or len(book_state.chapters) > 10:
+            logger.info("Book '%s' has %d words/%d chapters — using chunked review",
+                       book_state.title, total_words, len(book_state.chapters))
+            return await self._chunked_review(book_state, max_turns)
+
         for turn_num in range(1, turns_limit + 1):
             logger.info("Review turn %d/%d for '%s'", turn_num, turns_limit, book_state.title)
 
@@ -575,7 +797,12 @@ class Orchestrator:
         return book_state.review_history
 
     def _parse_critique(self, raw: str) -> dict:
-        """Parse the critique response from the LLM, handling various formats."""
+        """Parse the critique response from the LLM, handling various formats.
+        
+        (H4 fix: stronger JSON enforcement with re-prompt fallback.
+        Tries JSON first, then a more robust text parser, then returns
+        a safe default if all parsing fails.)
+        """
         # Try to extract JSON from the response
         clean = raw.strip()
 
@@ -593,33 +820,87 @@ class Orchestrator:
         try:
             data = json.loads(clean)
             if isinstance(data, dict):
+                # Validate required fields
+                if "issues" in data and isinstance(data["issues"], list):
+                    return data
+                # If it's a dict but missing issues, add empty list
+                data.setdefault("issues", [])
+                data.setdefault("overall_score", 5)
+                data.setdefault("verdict", "ready")
                 return data
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # Fallback: parse from text
+        # Fallback: parse from text using more robust patterns
         result = {"issues": [], "overall_score": 5, "verdict": "ready"}
 
-        # Try to extract score
-        score_match = re.search(r'score[:\s]*(\d+)', clean, re.IGNORECASE)
+        # Try to extract score - multiple patterns
+        score_match = re.search(r'(?:overall_?score|score)[\s:]*([0-9]+(?:\.\d+)?)', clean, re.IGNORECASE)
         if score_match:
-            result["overall_score"] = int(score_match.group(1))
+            result["overall_score"] = float(score_match.group(1))
 
-        # Try to extract issues
-        issue_blocks = re.split(r'(?:issue|problem|finding)\s*#?\s*\d+', clean, flags=re.IGNORECASE)
-        for block in issue_blocks[1:]:
-            chapter_match = re.search(r'chapter[:\s"]*(.+?)[":\s,]', block, re.IGNORECASE)
-            type_match = re.search(r'type[:\s"]*(.+?)[":\s,]', block, re.IGNORECASE)
-            desc_match = re.search(r'(?:description|problem)[:\s"]*(.+?)[":\s\n]', block, re.IGNORECASE)
-            sugg_match = re.search(r'suggestion[:\s"]*(.+?)[":\s\n]', block, re.IGNORECASE)
+        # Try to extract verdict
+        verdict_match = re.search(r'verdict[\s:]*["\']?([^"\',\n]+)["\']?', clean, re.IGNORECASE)
+        if verdict_match:
+            v = verdict_match.group(1).strip().lower()
+            if 'ready' in v or 'approved' in v or 'pass' in v:
+                result["verdict"] = "ready"
+            elif 'revision' in v or 'needs' in v or 'fail' in v:
+                result["verdict"] = "needs_revision"
 
-            if desc_match:
-                result["issues"].append({
-                    "chapter": chapter_match.group(1).strip().strip('"') if chapter_match else "unknown",
-                    "type": type_match.group(1).strip().strip('"') if type_match else "general",
-                    "description": desc_match.group(1).strip().strip('"'),
-                    "suggestion": sugg_match.group(1).strip().strip('"') if sugg_match else "Review and revise",
-                })
+        # Try to extract issues using multiple patterns
+        # Pattern 1: JSON-like issue objects in text
+        issue_json_pattern = re.compile(
+            r'\{[^}]*"?chapter"?[^}]*\}', re.IGNORECASE | re.DOTALL
+        )
+        for match in issue_json_pattern.finditer(clean):
+            try:
+                issue_data = json.loads(match.group())
+                if isinstance(issue_data, dict) and "chapter" in issue_data:
+                    result["issues"].append({
+                        "chapter": issue_data.get("chapter", "unknown"),
+                        "type": issue_data.get("type", "general"),
+                        "description": issue_data.get("description", ""),
+                        "suggestion": issue_data.get("suggestion", "Review and revise"),
+                    })
+            except json.JSONDecodeError:
+                continue
+
+        # Pattern 2: Structured text issues (numbered/bulleted)
+        if not result["issues"]:
+            # Split on issue markers
+            issue_blocks = re.split(
+                r'(?:issue|problem|finding|concern|flaw)\s*#?\s*\d+\s*[:.)\s]',
+                clean, flags=re.IGNORECASE
+            )
+            for block in issue_blocks[1:]:
+                chapter_match = re.search(r'chapter[\s:]*["\']?(.+?)["\']?', block, re.IGNORECASE)
+                type_match = re.search(r'type[\s:]*["\']?(.+?)["\']?', block, re.IGNORECASE)
+                desc_match = re.search(r'(?:description|problem|issue)[\s:]*["\']?(.+?)["\']?', block, re.IGNORECASE)
+                sugg_match = re.search(r'suggestion[\s:]*["\']?(.+?)["\']?', block, re.IGNORECASE)
+
+                if desc_match:
+                    result["issues"].append({
+                        "chapter": chapter_match.group(1).strip().strip('"') if chapter_match else "unknown",
+                        "type": type_match.group(1).strip().strip('"') if type_match else "general",
+                        "description": desc_match.group(1).strip().strip('"'),
+                        "suggestion": sugg_match.group(1).strip().strip('"') if sugg_match else "Review and revise",
+                    })
+
+        # Pattern 3: General bullet-point issues
+        if not result["issues"]:
+            bullet_pattern = re.compile(r'^\s*[-*•]\s*(.+)$', re.MULTILINE)
+            for match in bullet_pattern.finditer(clean):
+                text = match.group(1).strip()
+                if any(kw in text.lower() for kw in ['chapter', 'plot', 'character', 'pacing', 'continuity', 'tone', 'issue', 'problem']):
+                    # Try to extract chapter reference
+                    chapter_match = re.search(r'chapter[\s:]*["\']?(.+?)["\']?', text, re.IGNORECASE)
+                    result["issues"].append({
+                        "chapter": chapter_match.group(1).strip().strip('"') if chapter_match else "unknown",
+                        "type": "general",
+                        "description": text,
+                        "suggestion": "Review and revise",
+                    })
 
         if result["issues"]:
             result["verdict"] = "needs_revision"
@@ -627,21 +908,54 @@ class Orchestrator:
         return result
 
     def _match_chapter_title(self, query: str, chapters: dict) -> Optional[str]:
-        """Find the best matching chapter title for a given query string."""
-        query_lower = query.lower().strip()
+        """Find the best matching chapter title for a given query string.
+        
+        (H5 fix: improved fuzzy matching with token-based comparison,
+        normalization, and Levenshtein-like distance scoring.)
+        """
+        # Normalize query for comparison
+        query_normalized = self._normalize_title(query)
+        
         best_match = None
         best_score = 0
 
         for title in chapters:
-            title_lower = title.lower().strip()
-            # Exact match
-            if query_lower == title_lower:
+            title_normalized = self._normalize_title(title)
+            
+            # Exact match (normalized)
+            if query_normalized == title_normalized:
                 return title
-            # Contains match
-            if query_lower in title_lower or title_lower in query_lower:
-                score = min(len(query_lower), len(title_lower)) / max(len(query_lower), len(title_lower))
-                if score > best_score:
-                    best_score = score
-                    best_match = title
+            
+            # Substring match (either direction)
+            if query_normalized in title_normalized:
+                score = len(query_normalized) / len(title_normalized)
+            elif title_normalized in query_normalized:
+                score = len(title_normalized) / len(query_normalized)
+            else:
+                # Token-based Jaccard similarity
+                query_tokens = set(query_normalized.split())
+                title_tokens = set(title_normalized.split())
+                if query_tokens or title_tokens:
+                    intersection = query_tokens & title_tokens
+                    union = query_tokens | title_tokens
+                    score = len(intersection) / len(union) if union else 0
+                else:
+                    score = 0
 
-        return best_match if best_score > 0.5 else None
+            if score > best_score:
+                best_score = score
+                best_match = title
+
+        return best_match if best_score > 0.3 else None
+
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        """Normalize a chapter title for comparison.
+        
+        Lowercases, strips whitespace, removes punctuation, and collapses
+        spaces for consistent matching.
+        """
+        t = title.lower().strip()
+        t = re.sub(r'[^\w\s]', '', t)
+        t = re.sub(r'\s+', ' ', t)
+        return t

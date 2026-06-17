@@ -10,6 +10,8 @@ Key features:
 - Optional separate reviewer client for review/correction tasks
 """
 import asyncio
+import os
+import random
 import logging
 from typing import List, Dict, Optional, Any
 
@@ -27,7 +29,9 @@ class AIClient:
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
         # Single persistent async client reused across all requests
-        self._client = httpx.AsyncClient(timeout=1800.0)
+        # (L1) Configurable timeout via AI_TIMEOUT env var (default: 1800s = 30min)
+        timeout_secs = float(os.environ.get("AI_TIMEOUT", "1800"))
+        self._client = httpx.AsyncClient(timeout=timeout_secs)
 
     # ── Mutable configuration properties ──────────────────────────────
 
@@ -162,8 +166,10 @@ class AIClient:
                 # Check if content is empty and retry
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 if not content and attempt < max_retries:
-                    wait = 10 * (attempt + 1)
-                    logger.warning("[AIClient] Empty response, retrying in %ds...", wait)
+                    # (L2) Jitter: randomize wait time to prevent thunder-herd retries
+                    base_wait = 10 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[AIClient] Empty response, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
 
@@ -174,8 +180,10 @@ class AIClient:
                     f"API request failed with status {e.response.status_code}: {e.response.text}"
                 )
                 if e.response.status_code in (429, 500, 503) and attempt < max_retries:
-                    wait = 15 * (attempt + 1)
-                    logger.warning("[AIClient] Status %d, retrying in %ds...", e.response.status_code, wait)
+                    # (L2) Jitter for status code retries
+                    base_wait = 15 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[AIClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
                     await asyncio.sleep(wait)
                     continue
                 raise last_error
@@ -183,8 +191,10 @@ class AIClient:
             except Exception as e:
                 last_error = Exception(f"An error occurred: {str(e)}")
                 if attempt < max_retries:
-                    wait = 10 * (attempt + 1)
-                    logger.warning("[AIClient] Error, retrying in %ds...", wait)
+                    # (L2) Jitter for general error retries
+                    base_wait = 10 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[AIClient] Error, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
                 raise last_error
@@ -296,15 +306,18 @@ class ReviewerClient:
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
         max_retries: int = 2,
+        model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a completion request using the reviewer's endpoint/model
         but sharing the main client's HTTP connection and auth headers.
+        
+        (M3 fix: added model_override parameter for consistency with AIClient)
         """
         # Handle /v1 suffix
         url = f"{self._endpoint_url}/chat/completions" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/chat/completions"
         payload = {
-            "model": self._model_name,
+            "model": model_override or self._model_name,
             "messages": messages,
             "temperature": temperature,
         }
@@ -318,8 +331,10 @@ class ReviewerClient:
 
                 content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 if not content and attempt < max_retries:
-                    wait = 10 * (attempt + 1)
-                    logger.warning("[ReviewerClient] Empty response, retrying in %ds...", wait)
+                    # (L2) Jitter for empty response retries
+                    base_wait = 10 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[ReviewerClient] Empty response, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
 
@@ -330,8 +345,10 @@ class ReviewerClient:
                     f"Reviewer API request failed with status {e.response.status_code}: {e.response.text}"
                 )
                 if e.response.status_code in (429, 500, 503) and attempt < max_retries:
-                    wait = 15 * (attempt + 1)
-                    logger.warning("[ReviewerClient] Status %d, retrying in %ds...", e.response.status_code, wait)
+                    # (L2) Jitter for status code retries
+                    base_wait = 15 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[ReviewerClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
                     await asyncio.sleep(wait)
                     continue
                 raise last_error
@@ -339,8 +356,10 @@ class ReviewerClient:
             except Exception as e:
                 last_error = Exception(f"Reviewer error: {str(e)}")
                 if attempt < max_retries:
-                    wait = 10 * (attempt + 1)
-                    logger.warning("[ReviewerClient] Error, retrying in %ds...", wait)
+                    # (L2) Jitter for general error retries
+                    base_wait = 10 * (attempt + 1)
+                    wait = base_wait * (0.5 + random.random())
+                    logger.warning("[ReviewerClient] Error, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
                 raise last_error

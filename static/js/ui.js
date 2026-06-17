@@ -24,10 +24,9 @@ function toast(msg, type = '') {
 }
 
 /* ── HTML Escaping ─────────────────────────────────────────────── */
+// (L5 fix: regex-based escaping is faster than DOM element creation for large strings)
 function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /* ── Status Badge ──────────────────────────────────────────────── */
@@ -48,19 +47,24 @@ function statusBadge(status) {
 /* ── Progress Polling ──────────────────────────────────────────── */
 let pollingInterval = null;
 let pollingBookId = null;
+let pollingCallback = null;
 
 function startPolling(bookId, onDone) {
   stopPolling();
   pollingBookId = bookId;
+  pollingCallback = onDone;
   pollingInterval = setInterval(async () => {
-    if (!pollingBookId) return;
+    // (L7 fix: guard against stale callbacks from previous polling sessions)
+    if (!pollingBookId || !pollingCallback) return;
     try {
       const book = await apiFetch('/books/' + pollingBookId);
+      // Double-check that this callback still belongs to the current polling session
+      if (pollingBookId !== book.id) return;
       const isDone = ['completed', 'reviewed', 'failed'].includes(book.status);
-      if (onDone) onDone(book);
+      pollingCallback(book);
       if (isDone) {
         stopPolling();
-        if (onDone) onDone(book);
+        pollingCallback(book);
       }
     } catch (err) {
       console.error('poll error:', err);
@@ -74,4 +78,5 @@ function stopPolling() {
     pollingInterval = null;
   }
   pollingBookId = null;
+  pollingCallback = null;
 }

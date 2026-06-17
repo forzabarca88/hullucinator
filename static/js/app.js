@@ -83,6 +83,7 @@ function initCreateForm() {
 }
 
 /* ── Library ───────────────────────────────────────────────────── */
+/* ── Library (L6 fix: keyed reconciliation to minimize DOM thrashing) ── */
 async function loadBooks() {
   try {
     const books = await apiFetch('/books');
@@ -94,34 +95,62 @@ async function loadBooks() {
       return;
     }
 
-    list.innerHTML = books.map(b => {
+    // Build a set of expected book IDs
+    const expectedIds = new Set(books.map(b => b.id));
+    const booksMap = new Map(books.map(b => [b.id, b]));
+
+    // Remove cards for books that no longer exist
+    for (const card of list.querySelectorAll('.book-card')) {
+      if (!expectedIds.has(card.dataset.id)) {
+        card.remove();
+      }
+    }
+
+    // Update or create cards for each book
+    for (const b of books) {
+      let card = list.querySelector(`.book-card[data-id="${b.id}"]`);
       const p = b.progress || {};
       const pct = p.percentage || 0;
       const isDone = b.status === 'completed' || b.status === 'reviewed';
       const isFail = b.status === 'failed';
       const pClass = isDone ? 'complete' : isFail ? 'fail' : '';
 
-      let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${esc(t)}</span>`).join('');
-      let lengthBadge = b.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue)">${esc(b.length)}</span>` : '';
+      const html = buildBookCardHtml(b, p, pct, isDone, isFail, pClass);
 
-      return `
-        <div class="book-card" data-id="${b.id}" onclick="openDetail('${b.id}')">
-          <div class="book-title">${esc(b.title)}</div>
-          <div class="book-meta">
-            ${statusBadge(b.status)}
-            ${lengthBadge}
-            ${tagsHtml}
-          </div>
-          <div class="book-prompt">${esc(b.prompt)}</div>
-          ${pct > 0 ? `<div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>` : ''}
-          ${p.current_step && p.current_step !== b.status ? `<small style="color:var(--muted)">${esc(p.current_step)}</small>` : ''}
-        </div>`;
-    }).join('');
+      if (!card) {
+        // New book — create card
+        const frag = document.createElement('div');
+        frag.innerHTML = html;
+        list.appendChild(frag.firstElementChild);
+        list.querySelector(`.book-card[data-id="${b.id}"]`).onclick = () => openDetail(b.id);
+      } else {
+        // Existing book — check if update is needed
+        if (card.innerHTML !== html) {
+          card.innerHTML = html;
+        }
+      }
+    }
   } catch (err) {
     console.error('loadBooks error:', err);
   }
 }
 
+function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
+  let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${esc(t)}</span>`).join('');
+  let lengthBadge = b.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue)">${esc(b.length)}</span>` : '';
+
+  return `<div class="book-card" data-id="${b.id}">
+    <div class="book-title">${esc(b.title)}</div>
+    <div class="book-meta">
+      ${statusBadge(b.status)}
+      ${lengthBadge}
+      ${tagsHtml}
+    </div>
+    <div class="book-prompt">${esc(b.prompt)}</div>
+    ${pct > 0 ? `<div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>` : ''}
+    ${p.current_step && p.current_step !== b.status ? `<small style="color:var(--muted)">${esc(p.current_step)}</small>` : ''}
+  </div>`;
+}
 /* ── Detail Modal ──────────────────────────────────────────────── */
 function initModal() {
   $('detailClose').addEventListener('click', closeModal);

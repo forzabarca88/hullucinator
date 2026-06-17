@@ -19,24 +19,25 @@ async def client():
 
 @pytest.fixture(autouse=True)
 def _reset_config():
-    """Reset AI client config before each test."""
-    from app.main import reviewer_client as _rev
+    """Reset AI client config before each test.
+
+    (C3 fix: uses server_config instead of old module-level globals)
+    """
+    import app.main as _m
     ai_client.endpoint_url = ""
     ai_client.model_name = ""
     ai_client.api_key = None
-    # Reset reviewer_client and _persisted
-    import app.main as _m
-    _m.reviewer_client = None
-    _m._persisted = None
-    _m.configured = False
+    _m.server_config.configured = False
+    _m.server_config.reviewer_client = None
+    _m.server_config.persisted = None
     yield
     # Clean up after test
     ai_client.endpoint_url = ""
     ai_client.model_name = ""
     ai_client.api_key = None
-    _m.reviewer_client = None
-    _m._persisted = None
-    _m.configured = False
+    _m.server_config.configured = False
+    _m.server_config.reviewer_client = None
+    _m.server_config.persisted = None
 
 
 class TestHealthEndpoint:
@@ -141,17 +142,19 @@ class TestModelListing:
         """GET /api/models succeeds when endpoint is set."""
         ai_client.endpoint_url = "http://localhost:8080"
 
-        # Mock the HTTP client response
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={
-            "data": [
+        # (C4 fix: list_available_models creates a temp AIClient. Patch
+        # AIClient.list_models at the class level so ALL instances — shared
+        # and temp — return the mocked data. Can't patch httpx.AsyncClient.get
+        # at class level because the test fixture's AsyncClient also uses it.)
+        async def mock_list_models(self):
+            return [
                 {"id": "gpt-4o", "name": "gpt-4o"},
                 {"id": "gpt-3.5-turbo", "name": "gpt-3.5-turbo"},
             ]
-        })
 
-        with patch.object(ai_client._client, "get", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            type(ai_client), "list_models", mock_list_models,
+        ):
             resp = await client.get("/api/models")
             assert resp.status_code == 200
             data = resp.json()
@@ -163,13 +166,12 @@ class TestModelListing:
         """GET /api/models with endpoint_url query param works during setup."""
         ai_client.endpoint_url = ""  # Not configured yet
 
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(return_value={
-            "data": [{"id": "qwen3.6-27b", "name": "qwen3.6-27b"}]
-        })
+        async def mock_list_models(self):
+            return [{"id": "qwen3.6-27b", "name": "qwen3.6-27b"}]
 
-        with patch.object(ai_client._client, "get", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            type(ai_client), "list_models", mock_list_models,
+        ):
             resp = await client.get("/api/models", params={
                 "endpoint_url": "http://test.com",
                 "api_key": "test-key",
@@ -201,6 +203,9 @@ class TestModelListing:
             "data": [{"id": "critic-model", "name": "critic-model"}]
         })
 
+        # (reviewer models with endpoint_url uses ai_client._client.get directly
+        # — this is an instance-level patch, safe because the test fixture's
+        # AsyncClient is a different instance.)
         with patch.object(ai_client._client, "get", new_callable=AsyncMock, return_value=mock_response):
             resp = await client.get("/api/reviewer/models", params={
                 "endpoint_url": "http://reviewer.com",
