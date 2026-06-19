@@ -137,6 +137,17 @@ async function loadBooks() {
           card.innerHTML = html;
         }
       }
+      // Bind click on the card (opens detail) but not on the delete button
+      const c = list.querySelector(`.book-card[data-id="${b.id}"]`);
+      c.onclick = () => openDetail(b.id);
+      // Bind delete button
+      const deleteBtn = c.querySelector('.book-delete-btn');
+      if (deleteBtn) {
+        deleteBtn.onclick = (e) => {
+          e.stopPropagation();
+          deleteBook(b.id, b.title);
+        };
+      }
     }
 
     // Auto-refresh: start polling if any books are active, stop otherwise
@@ -155,6 +166,7 @@ function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
   let lengthBadge = b.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue)">${esc(b.length)}</span>` : '';
 
   return `<div class="book-card" data-id="${b.id}">
+    <button class="book-delete-btn" data-delete-id="${b.id}" title="Delete book">🗑</button>
     <div class="book-title">${esc(b.title)}</div>
     <div class="book-meta">
       ${statusBadge(b.status)}
@@ -182,6 +194,7 @@ function attachModalActionListeners(bookId) {
       const action = btn.dataset.action;
       if (action === 'review') triggerReview(bookId);
       else if (action === 'retry') retryBook(bookId);
+      else if (action === 'delete') deleteBook(bookId, $('detailTitle').textContent);
     });
   });
 }
@@ -301,6 +314,7 @@ function renderDetail(book) {
   if (book.status === 'failed') {
     html += `<button class="btn btn-secondary btn-sm" data-action="retry">🔄 Retry</button>`;
   }
+  html += `<button class="btn btn-secondary btn-sm" data-action="delete" style="color:var(--red);border-color:var(--red)">🗑 Delete</button>`;
   html += `</div>`;
 
   return html;
@@ -389,7 +403,22 @@ async function retryBook(bookId) {
         review_max_turns: book.review_max_turns || 2,
       }),
     });
+    // Delete the old failed book entry
+    await apiFetch('/books/' + bookId, { method: 'DELETE' });
     toast('New book queued!', 'success');
+    closeModal();
+    loadBooks();
+  } catch (err) {
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+/* ── Delete Book ───────────────────────────────────────────────── */
+async function deleteBook(bookId, title) {
+  if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+  try {
+    await apiFetch('/books/' + bookId, { method: 'DELETE' });
+    toast('Book deleted.', 'success');
     closeModal();
     loadBooks();
   } catch (err) {

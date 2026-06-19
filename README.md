@@ -46,6 +46,8 @@ The built-in web interface provides:
 - **Book details** — View summary, outline, chapter content, and review audit trail
 - **Professional review** — See critique score, verdict, and corrections applied
 - **Downloads** — Export completed books as EPUB (with genre metadata and review info) or PDF
+- **Delete books** — Remove books from the library via hover button on cards or delete button in detail modal (with confirmation)
+- **Retry failed books** — Restart generation for failed books; the old failed entry is automatically removed
 - **Auto-polling** — Progress updates automatically without page refresh
 - **Settings panel** — Configure AI endpoint URL, API key, model, reviewer endpoint, reviewer model, and max review turns from the GUI (top-right ⚙️ button)
 
@@ -64,6 +66,7 @@ The built-in web interface provides:
 | `GET` | `/api/books/{book_id}` | Get book status and content |
 | `GET` | `/api/books/{book_id}/validate` | Validate book completeness |
 | `POST` | `/api/books/{book_id}/review` | Trigger professional review |
+| `DELETE` | `/api/books/{book_id}` | Delete a book (cancels active task if generating) |
 | `GET` | `/api/books/{book_id}/export/{format}` | Download as `epub` or `pdf` |
 
 ### Environment Variables
@@ -154,6 +157,14 @@ curl -o mybook.epub http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be7
 # PDF (simpler formatting, plain text, review metadata on title page)
 curl -o mybook.pdf http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99/export/pdf
 ```
+
+### Delete
+
+```bash
+curl -X DELETE http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99
+```
+
+Deletes the book permanently. If the book is actively being generated, the background task is cancelled first. In the web UI, a delete button (🗑) appears on book cards (visible on hover) and in the detail modal. Confirmation is required before deletion.
 
 ## Book Generation Pipeline
 

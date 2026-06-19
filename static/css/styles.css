@@ -207,6 +207,23 @@ select { cursor: pointer; appearance: auto; }
 .book-card .book-prompt { color: var(--muted); font-size: .9rem; margin-top: .4rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Delete button on book card — top-right corner */
+.book-delete-btn {
+  position: absolute;
+  top: .5rem;
+  right: .5rem;
+  background: rgba(231,76,60,.08);
+  border: 1px solid rgba(231,76,60,.25);
+  color: var(--red);
+  cursor: pointer;
+  font-size: .9rem;
+  padding: .25rem .5rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: all .15s;
+}
+.book-delete-btn:hover { background: rgba(231,76,60,.2); border-color: var(--red); }
+
 /* ── Status Badges ────────────────────────────────────────────── */
 .badge {
   display: inline-block;

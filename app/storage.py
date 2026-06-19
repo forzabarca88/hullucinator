@@ -85,6 +85,15 @@ def load_book(book_id: str) -> Optional[BookState]:
         return BookState(**data)
 
 
+def delete_book(book_id: str) -> bool:
+    """Delete a book's JSON file from disk. Returns True if deleted, False if not found."""
+    file_path = BOOKS_DIR / f"{book_id}.json"
+    if not file_path.exists():
+        return False
+    file_path.unlink()
+    return True
+
+
 def list_books() -> List[BookState]:
     """Return all stored books sorted by creation time (newest first)."""
     books = []

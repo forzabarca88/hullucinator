@@ -41,7 +41,7 @@ def _safe_download_name(title: str) -> str:
 from app.schemas import BookState, BookCreateRequest, AIConfig
 from app.ai_client import AIClient, ReviewerClient
 from app.orchestrator import Orchestrator
-from app.storage import save_book, load_book, list_books, save_config, load_config
+from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
 from app.exporter import export_to_epub, export_to_pdf
 
 logging.basicConfig(
@@ -290,6 +290,18 @@ STATIC_DIR = _resolve_static_dir()
 
 if STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    """Disable browser caching for static assets so UI updates take effect immediately."""
+    if request.url.path.startswith("/static/"):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+    return await call_next(request)
 
 
 # ── Web UI Routes ───────────────────────────────────────────────────────
@@ -689,6 +701,30 @@ async def export_book(book_id: str, fmt: str):
     except Exception as e:
         logger.error("Export failed for book %s: %s", book_id, e)
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+# ── Delete Book ─────────────────────────────────────────────────
+
+@app.delete("/api/books/{book_id}")
+async def delete_book_endpoint(book_id: str):
+    """Delete a book and its data from storage."""
+    book_state = load_book(book_id)
+    if not book_state:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Cancel active task if the book is being generated
+    task = _active_tasks.pop(book_id, None)
+    if task and not task.done():
+        task.cancel()
+        logger.info("Cancelled active generation task for book '%s' (%s)", book_state.title, book_id)
+
+    # Delete the book file
+    deleted = delete_book(book_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Failed to delete book file")
+
+    logger.info("Deleted book '%s' (%s)", book_state.title, book_id)
+    return {"status": "deleted", "book_id": book_id}
 
 
 # ── CLI entry point ─────────────────────────────────────────────────────
