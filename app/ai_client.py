@@ -249,7 +249,10 @@ class ReviewerClient:
 
     @property
     def endpoint_url(self) -> str:
-        return self._endpoint_url
+        """Return effective endpoint URL. Falls back to main client if empty."""
+        if self._endpoint_url:
+            return self._endpoint_url
+        return self._main.endpoint_url
 
     @endpoint_url.setter
     def endpoint_url(self, value: str):
@@ -258,7 +261,10 @@ class ReviewerClient:
 
     @property
     def model_name(self) -> str:
-        return self._model_name
+        """Return effective model name. Falls back to main client if empty."""
+        if self._model_name:
+            return self._model_name
+        return self._main.model_name
 
     @model_name.setter
     def model_name(self, value: str):
@@ -267,7 +273,10 @@ class ReviewerClient:
 
     @property
     def api_key(self) -> Optional[str]:
-        return self._api_key
+        """Return effective API key. Falls back to main client if empty."""
+        if self._api_key:
+            return self._api_key
+        return self._main.api_key
 
     @api_key.setter
     def api_key(self, value: Optional[str]):
@@ -284,11 +293,11 @@ class ReviewerClient:
             self._headers["Authorization"] = f"Bearer {self._main.api_key}"
 
     def get_config(self) -> Dict[str, Any]:
-        """Return reviewer configuration."""
+        """Return reviewer configuration (effective values with fallback)."""
         return {
-            "endpoint_url": self._endpoint_url,
-            "model_name": self._model_name,
-            "api_key_set": self._api_key is not None and self._api_key != "",
+            "endpoint_url": self.endpoint_url,
+            "model_name": self.model_name,
+            "api_key_set": self.api_key is not None and self.api_key != "",
         }
 
     async def update_config(self, endpoint_url: Optional[str] = None,
@@ -307,8 +316,8 @@ class ReviewerClient:
         Fetch the list of available models from the reviewer's LLM API.
         Uses the reviewer's endpoint URL and API key with the shared HTTP connection.
         """
-        # Handle /v1 suffix
-        url = f"{self._endpoint_url}/models" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/models"
+        # Handle /v1 suffix (use effective endpoint via property)
+        url = f"{self.endpoint_url}/models" if self.endpoint_url.endswith('/v1') else f"{self.endpoint_url}/v1/models"
         try:
             response = await self._main._client.get(url, headers=self._headers)
             response.raise_for_status()
@@ -333,7 +342,7 @@ class ReviewerClient:
             else:
                 models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
 
-            logger.info("Fetched %d reviewer models from %s", len(models), self._endpoint_url)
+            logger.info("Fetched %d reviewer models from %s", len(models), self.endpoint_url)
             return models
 
         except httpx.HTTPStatusError as e:
@@ -353,13 +362,14 @@ class ReviewerClient:
         """
         Send a completion request using the reviewer's endpoint/model
         but sharing the main client's HTTP connection and auth headers.
-        
+
         (M3 fix: added model_override parameter for consistency with AIClient)
+        (F2 fix: use effective endpoint/model via property getters for fallback)
         """
-        # Handle /v1 suffix
-        url = f"{self._endpoint_url}/chat/completions" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/chat/completions"
+        # Handle /v1 suffix (use effective endpoint via property)
+        url = f"{self.endpoint_url}/chat/completions" if self.endpoint_url.endswith('/v1') else f"{self.endpoint_url}/v1/chat/completions"
         payload = {
-            "model": model_override or self._model_name,
+            "model": model_override or self.model_name,
             "messages": messages,
             "temperature": temperature,
         }
