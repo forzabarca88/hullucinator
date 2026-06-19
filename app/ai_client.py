@@ -129,6 +129,19 @@ class AIClient:
             logger.warning("Model listing failed: %s", e)
             return []
 
+    @staticmethod
+    def _extract_content(result: Dict[str, Any]) -> str:
+        """Extract text content from an LLM response, handling both string and list formats.
+        
+        Some providers (e.g. Mistral) return content as a list of text blocks:
+        [{"type": "text", "text": "..."}, ...]
+        """
+        raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if isinstance(raw, list):
+            parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
+            return "\n".join(parts).strip()
+        return str(raw).strip()
+
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
@@ -164,7 +177,7 @@ class AIClient:
                 result = response.json()
 
                 # Check if content is empty and retry
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                content = self._extract_content(result)
                 if not content and attempt < max_retries:
                     # (L2) Jitter: randomize wait time to prevent thunder-herd retries
                     base_wait = 10 * (attempt + 1)
@@ -358,7 +371,7 @@ class ReviewerClient:
                 response.raise_for_status()
                 result = response.json()
 
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                content = AIClient._extract_content(result)
                 if not content and attempt < max_retries:
                     # (L2) Jitter for empty response retries
                     base_wait = 10 * (attempt + 1)

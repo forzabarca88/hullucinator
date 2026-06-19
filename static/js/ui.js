@@ -80,3 +80,25 @@ function stopPolling() {
   pollingBookId = null;
   pollingCallback = null;
 }
+
+/* ── Library Auto-Refresh ───────────────────────────────────────── */
+let libraryPollingInterval = null;
+const LIBRARY_POLL_INTERVAL = 10000; // 10 seconds
+
+function startLibraryPolling(onUpdate) {
+  stopLibraryPolling();
+  libraryPollingInterval = setInterval(async () => {
+    try {
+      onUpdate();
+    } catch (err) {
+      console.error('library poll error:', err);
+    }
+  }, LIBRARY_POLL_INTERVAL);
+}
+
+function stopLibraryPolling() {
+  if (libraryPollingInterval) {
+    clearInterval(libraryPollingInterval);
+    libraryPollingInterval = null;
+  }
+}

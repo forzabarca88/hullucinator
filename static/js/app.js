@@ -90,8 +90,12 @@ async function loadBooks() {
     const list = $('booksList');
     if (!list) return;
 
+    const activeStatuses = new Set(['pending', 'summary_generated', 'outline_generated', 'in_progress', 'reviewing']);
+    const hasActive = books.some(b => activeStatuses.has(b.status));
+
     if (!books.length) {
       list.innerHTML = '<div class="empty-state"><p class="empty-icon">📖</p><p>No books yet. Create one above!</p></div>';
+      stopLibraryPolling();
       return;
     }
 
@@ -133,6 +137,13 @@ async function loadBooks() {
           card.innerHTML = html;
         }
       }
+    }
+
+    // Auto-refresh: start polling if any books are active, stop otherwise
+    if (hasActive) {
+      startLibraryPolling(loadBooks);
+    } else {
+      stopLibraryPolling();
     }
   } catch (err) {
     console.error('loadBooks error:', err);

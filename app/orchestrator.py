@@ -23,6 +23,16 @@ from app.schemas import BookState
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_content(result: dict) -> str:
+    """Extract text content from an LLM response, handling both string and list formats."""
+    raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if isinstance(raw, list):
+        parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
+        return "\n".join(parts).strip()
+    return str(raw).strip()
+
+
 # Valid status transition graph
 VALID_TRANSITIONS: dict[str, list[str]] = {
     "pending": ["summary_generated", "failed"],
@@ -46,13 +56,13 @@ LENGTH_CHAPTER_COUNT: dict[str, str] = {
 
 # Length-to-word-count guidance
 LENGTH_WORD_COUNT: dict[str, str] = {
-    "short_story": "1,000–7,500",
-    "novella": "7,500–20,000",
-    "novel": "20,000–50,000",
+    "short_story": "1,000-7,500",
+    "novella": "7,500-20,000",
+    "novel": "20,000-50,000",
     "epic": "50,000+",
 }
 
-# Review thresholds — switch to chunked review for long books
+# Review thresholds - switch to chunked review for long books
 REVIEW_WORD_THRESHOLD = 30_000  # words before chunked review is used
 REVIEW_CHUNK_SIZE = 5  # chapters per review chunk
 
@@ -112,7 +122,7 @@ class Orchestrator:
 
     async def _chunked_review(self, book_state, max_turns=None):
         """Review a long book in chunks to avoid context window overflow.
-        
+
         (M4 fix: For books exceeding REVIEW_WORD_THRESHOLD words or with many
         chapters, reviews are done in batches of REVIEW_CHUNK_SIZE chapters.
         Results are aggregated and corrections applied across all chunks.)
@@ -120,46 +130,46 @@ class Orchestrator:
         tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
         reviewer = self._get_reviewer()
         turns_limit = max_turns if max_turns is not None else book_state.review_max_turns
-        
+
         # Initialize review history
         if book_state.review_history is None:
             book_state.review_history = []
-        
+
         logger.info("Starting chunked review for '%s' (%d chapters, ~%d words, max %d turns)...",
                     book_state.title, len(book_state.chapters),
                     sum(len(c.split()) for c in book_state.chapters.values()),
                     turns_limit)
-        
+
         # Split chapters into chunks
         chapters = list(book_state.chapters.items())
         _, chunk_size = self._get_review_thresholds()
         chunks = [chapters[i:i + chunk_size] for i in range(0, len(chapters), chunk_size)]
-        
+
         # Collect all issues across chunks
         all_issues = []
         all_corrections = []
         chunk_scores = []
-        
+
         for turn_num in range(1, turns_limit + 1):
             logger.info("Chunked review turn %d/%d for '%s'", turn_num, turns_limit, book_state.title)
-            
+
             # Update progress for UI
             if turn_num > 1:
                 book_state.progress["current_step"] = f"reviewing (turn {turn_num})"
                 book_state.progress["percentage"] = 97 + int((turn_num - 1) / turns_limit * 3)
                 save_book(book_state.id, book_state)
-            
+
             # Review each chunk
             turn_issues = []
             turn_scores = []
             turn_corrections = []
-            
+
             for chunk_idx, chunk in enumerate(chunks):
                 # Build review text for this chunk
                 review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
                 review_text += f"Summary:\n{book_state.summary}\n\n"
                 review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
-                
+
                 # Include chapter summaries for chapters NOT in this chunk (context)
                 other_summaries = []
                 chunk_titles = {t for t, _ in chunk}
@@ -169,11 +179,11 @@ class Orchestrator:
                             other_summaries.append(f"  • {title}: {summary}")
                 if other_summaries:
                     review_text += "Other chapter summaries (for context):\n" + "\n".join(other_summaries) + "\n\n"
-                
+
                 # Include the actual content for chapters in this chunk
                 for idx, (title, content_text) in enumerate(chunk, 1):
                     review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content_text}"
-                
+
                 # If this is turn > 1, include prior review results for context
                 if turn_num > 1 and book_state.review_history:
                     review_text += "\n\n--- Previous Review History ---\n"
@@ -184,7 +194,7 @@ class Orchestrator:
                         if prev.get('corrections'):
                             for corr in prev['corrections']:
                                 review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
-                
+
                 # Critique this chunk
                 critique_messages = [
                     {"role": "system", "content": (
@@ -197,20 +207,20 @@ class Orchestrator:
                     )},
                     {"role": "user", "content": review_text},
                 ]
-                
+
                 critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
-                critique_raw = critique_response["choices"][0]["message"]["content"].strip()
-                
+                critique_raw = _extract_content(critique_response)
+
                 critique_data = self._parse_critique(critique_raw)
                 chunk_issues = critique_data.get("issues", [])
                 chunk_score = critique_data.get("overall_score", 5)
                 chunk_verdict = critique_data.get("verdict", "needs_revision")
-                
+
                 turn_scores.append(chunk_score)
-                
+
                 logger.info("Chunk %d/%d: score=%d, verdict=%s, %d issues",
                            chunk_idx + 1, len(chunks), chunk_score, chunk_verdict, len(chunk_issues))
-                
+
                 # Filter issues to only include chapters in this chunk
                 for issue in chunk_issues:
                     chapter_title = issue.get("chapter", "")
@@ -223,7 +233,7 @@ class Orchestrator:
                             else:
                                 continue
                     turn_issues.append(issue)
-                
+
                 # Correct issues in this chunk (using writer client)
                 corrected_chapters = set()
                 for issue in chunk_issues:
@@ -232,10 +242,10 @@ class Orchestrator:
                         continue
                     if chapter_title in corrected_chapters:
                         continue
-                    
+
                     description = issue.get("description", "")
                     suggestion = issue.get("suggestion", "")
-                    
+
                     # Build revision context with summaries of other chapters
                     prior_context = ""
                     if book_state.chapter_summaries:
@@ -245,7 +255,7 @@ class Orchestrator:
                                 prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
                         if prior_parts:
                             prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
-                    
+
                     revision_messages = [
                         {"role": "system", "content": (
                             "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
@@ -264,15 +274,15 @@ class Orchestrator:
                             f"Rewrite this chapter to address the issue. Return only the revised chapter content."
                         )},
                     ]
-                    
+
                     revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
-                    revised_content = revision_response["choices"][0]["message"]["content"].strip()
-                    
+                    revised_content = _extract_content(revision_response)
+
                     book_state.chapters[chapter_title] = revised_content
                     new_summary = await self._summarize_chapter(revised_content, chapter_title)
                     book_state.chapter_summaries[chapter_title] = new_summary
                     corrected_chapters.add(chapter_title)
-                    
+
                     turn_corrections.append({
                         "chapter": chapter_title,
                         "issue_type": issue.get("type", "general"),
@@ -281,11 +291,11 @@ class Orchestrator:
                         "corrected": True,
                     })
                     save_book(book_state.id, book_state)
-            
+
             # Aggregate results for this turn
             avg_score = int(sum(turn_scores) / len(turn_scores)) if turn_scores else 5
             overall_verdict = "ready" if all(s >= 7 for s in turn_scores) else "needs_revision"
-            
+
             # Record this turn in history
             turn_record = {
                 "turn": turn_num,
@@ -298,10 +308,10 @@ class Orchestrator:
             book_state.review_history.append(turn_record)
             book_state.review = turn_record
             save_book(book_state.id, book_state)
-            
+
             logger.info("Turn %d complete: avg_score=%d, verdict=%s, %d corrections",
                        turn_num, avg_score, overall_verdict, len(turn_corrections))
-            
+
             # If all chunks pass review, we're done
             if overall_verdict == "ready" or not turn_issues:
                 logger.info("Book '%s' passed chunked review after %d turn(s) (avg score: %d/10)",
@@ -312,7 +322,7 @@ class Orchestrator:
                 book_state.progress["percentage"] = 100
                 save_book(book_state.id, book_state)
                 return book_state.review_history
-        
+
         # Max turns reached without passing
         logger.warning("Book '%s' did not pass chunked review after %d turns", book_state.title, turns_limit)
         book_state.review["reviewed"] = True
@@ -322,7 +332,7 @@ class Orchestrator:
         book_state.progress["current_step"] = "reviewed"
         book_state.progress["percentage"] = 100
         save_book(book_state.id, book_state)
-        
+
         return book_state.review_history
 
 
@@ -351,7 +361,7 @@ class Orchestrator:
         ]
 
         response = await self.ai_client.generate_completion(messages)
-        summary = response["choices"][0]["message"]["content"].strip()
+        summary = _extract_content(response)
 
         book_state.summary = summary
         _transition(book_state, "summary_generated")
@@ -473,7 +483,7 @@ class Orchestrator:
         ]
 
         response = await self.ai_client.generate_completion(messages)
-        outline_content = response["choices"][0]["message"]["content"]
+        outline_content = _extract_content(response)
         outline = self._parse_outline(outline_content)
 
         book_state.outline = outline
@@ -535,7 +545,7 @@ class Orchestrator:
         ]
 
         response = await self.ai_client.generate_completion(messages, temperature=0.8)
-        return response["choices"][0]["message"]["content"].strip()
+        return _extract_content(response)
 
     async def _summarize_chapter(self, chapter_content: str, chapter_title: str) -> str:
         """
@@ -556,7 +566,7 @@ class Orchestrator:
         ]
 
         response = await self.ai_client.generate_completion(messages, temperature=0.3)
-        return response["choices"][0]["message"]["content"].strip()
+        return _extract_content(response)
 
     async def generate_chapters(self, book_state: BookState):
         """Generate all chapters from the outline, with continuity context."""
@@ -635,7 +645,7 @@ class Orchestrator:
         total_words = sum(len(c.split()) for c in book_state.chapters.values())
         word_threshold, _ = self._get_review_thresholds()
         if total_words > word_threshold or len(book_state.chapters) > 10:
-            logger.info("Book '%s' has %d words/%d chapters — using chunked review",
+            logger.info("Book '%s' has %d words/%d chapters - using chunked review",
                        book_state.title, total_words, len(book_state.chapters))
             return await self._chunked_review(book_state, max_turns)
 
@@ -687,7 +697,7 @@ class Orchestrator:
             ]
 
             critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
-            critique_raw = critique_response["choices"][0]["message"]["content"].strip()
+            critique_raw = _extract_content(critique_response)
 
             # Parse critique response
             critique_data = self._parse_critique(critique_raw)
@@ -748,7 +758,7 @@ class Orchestrator:
                     ]
 
                     revision_response = await self.ai_client.generate_completion(revision_messages, temperature=0.7)
-                    revised_content = revision_response["choices"][0]["message"]["content"].strip()
+                    revised_content = _extract_content(revision_response)
 
                     # Update chapter and regenerate its summary
                     book_state.chapters[chapter_title] = revised_content
@@ -797,7 +807,7 @@ class Orchestrator:
                 save_book(book_state.id, book_state)
                 return book_state.review_history
 
-        # Max turns reached without passing — mark as reviewed anyway with note
+        # Max turns reached without passing - mark as reviewed anyway with note
         logger.warning("Book '%s' did not pass review after %d turns", book_state.title, turns_limit)
         book_state.review["reviewed"] = True
         book_state.review["max_turns_reached"] = True
@@ -811,7 +821,7 @@ class Orchestrator:
 
     def _parse_critique(self, raw: str) -> dict:
         """Parse the critique response from the LLM, handling various formats.
-        
+
         (H4 fix: stronger JSON enforcement with re-prompt fallback.
         Tries JSON first, then a more robust text parser, then returns
         a safe default if all parsing fails.)
@@ -922,23 +932,23 @@ class Orchestrator:
 
     def _match_chapter_title(self, query: str, chapters: dict) -> Optional[str]:
         """Find the best matching chapter title for a given query string.
-        
+
         (H5 fix: improved fuzzy matching with token-based comparison,
         normalization, and Levenshtein-like distance scoring.)
         """
         # Normalize query for comparison
         query_normalized = self._normalize_title(query)
-        
+
         best_match = None
         best_score = 0
 
         for title in chapters:
             title_normalized = self._normalize_title(title)
-            
+
             # Exact match (normalized)
             if query_normalized == title_normalized:
                 return title
-            
+
             # Substring match (either direction)
             if query_normalized in title_normalized:
                 score = len(query_normalized) / len(title_normalized)
@@ -964,7 +974,7 @@ class Orchestrator:
     @staticmethod
     def _normalize_title(title: str) -> str:
         """Normalize a chapter title for comparison.
-        
+
         Lowercases, strips whitespace, removes punctuation, and collapses
         spaces for consistent matching.
         """
