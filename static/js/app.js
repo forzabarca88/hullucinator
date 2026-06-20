@@ -34,14 +34,39 @@ function renderTagBadges() {
   const container = $('tagBadges');
   if (!container) return;
   container.innerHTML = tags.map((t, i) =>
-    `<span class="tag-badge">${esc(t)}<button data-idx="${i}">&times;</button></span>`
+    `<span class="tag-badge">${esc(t)}<button data-idx="${i}">✕</button></span>`
   ).join('');
 }
 
 /* ── Create Book ───────────────────────────────────────────────── */
 function initCreateForm() {
+  // Live character counter for the prompt textarea
+  const promptEl = $('prompt');
+  const counterEl = $('promptCounter');
+  if (promptEl && counterEl) {
+    promptEl.addEventListener('input', () => {
+      const len = promptEl.value.length;
+      counterEl.textContent = len.toLocaleString() + ' characters';
+      counterEl.className = 'field-hint' + (len > 10000 ? ' prompt-warn' : '');
+    });
+  }
+
   $('createForm').addEventListener('submit', async e => {
     e.preventDefault();
+
+    // Client-side validation — fail fast with clear messages
+    const title = $('title').value.trim();
+    const prompt = $('prompt').value.trim();
+    if (!title) {
+      toast('Please enter a book title.', 'error');
+      $('title').focus();
+      return;
+    }
+    if (!prompt) {
+      toast('Please enter a prompt or concept.', 'error');
+      $('prompt').focus();
+      return;
+    }
 
     // Guard: must be configured
     if (!appConfigured) {
@@ -54,20 +79,22 @@ function initCreateForm() {
 
     const btn = $('createBtn');
     btn.disabled = true;
-    btn.textContent = '⏳ Queuing...';
+    btn.textContent = 'Queuing…';
 
     try {
+      const turns = parseInt($('maxTurns')?.value);
       const data = await apiFetch('/books/create', {
         method: 'POST',
         body: JSON.stringify({
-          title: $('title').value.trim(),
-          prompt: $('prompt').value.trim(),
+          title: title,
+          prompt: prompt,
           tags: tags,
-          length: $('bookLength').value,
-          review_max_turns: parseInt($('maxTurns').value),
+          length: $('bookLength')?.value || 'novel',
+          review_max_turns: isNaN(turns) ? 2 : turns,
+          skip_review: false,
         }),
       });
-      toast('Book "' + data.book_id.slice(0, 8) + '..." queued!', 'success');
+      toast('Book "' + data.book_id.slice(0, 8) + '…" queued!', 'success');
       $('title').value = '';
       $('prompt').value = '';
       tags = [];
@@ -94,7 +121,7 @@ async function loadBooks() {
     const hasActive = books.some(b => activeStatuses.has(b.status));
 
     if (!books.length) {
-      list.innerHTML = '<div class="empty-state"><p class="empty-icon">📖</p><p>No books yet. Create one above!</p></div>';
+      list.innerHTML = '<div class="empty-state"><hr><p>Your shelves are empty. Submit your first manuscript above.</p></div>';
       stopLibraryPolling();
       return;
     }
@@ -163,10 +190,10 @@ async function loadBooks() {
 
 function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
   let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${esc(t)}</span>`).join('');
-  let lengthBadge = b.length ? `<span class="badge" style="background:rgba(52,152,219,.1);color:var(--blue)">${esc(b.length)}</span>` : '';
+  let lengthBadge = b.length ? `<span class="status-label" style="color:var(--status-pending);background:rgba(91,123,138,0.08)">${esc(b.length)}</span>` : '';
 
   return `<div class="book-card" data-id="${b.id}">
-    <button class="book-delete-btn" data-delete-id="${b.id}" title="Delete book">🗑</button>
+    <button class="book-delete-btn" data-delete-id="${b.id}" title="Delete book">Delete</button>
     <div class="book-title">${esc(b.title)}</div>
     <div class="book-meta">
       ${statusBadge(b.status)}
@@ -175,9 +202,10 @@ function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
     </div>
     <div class="book-prompt">${esc(b.prompt)}</div>
     ${pct > 0 ? `<div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>` : ''}
-    ${p.current_step && p.current_step !== b.status ? `<small style="color:var(--muted)">${esc(p.current_step)}</small>` : ''}
+    ${p.current_step && p.current_step !== b.status ? `<small style="color:var(--ash)">${esc(p.current_step)}</small>` : ''}
   </div>`;
 }
+
 /* ── Detail Modal ──────────────────────────────────────────────── */
 function initModal() {
   $('detailClose').addEventListener('click', closeModal);
@@ -270,9 +298,9 @@ function renderDetail(book) {
     html += `<div class="modal-section">
       <h3>Progress</h3>
       <div class="progress-bar"><div class="progress-fill ${pClass}" style="width:${pct}%"></div></div>
-      <p style="margin-top:.3rem;font-size:.85rem">${esc(p.current_step || book.status)} (${pct}%)</p>
-      ${p.total_chapters ? `<small style="color:var(--muted)">Chapters: ${p.chapters_completed || 0}/${p.total_chapters}</small>` : ''}
-      ${p.error ? `<p style="color:var(--red);margin-top:.3rem">Error: ${esc(p.error)}</p>` : ''}
+      <p style="margin-top:0.3rem;font-size:0.85rem">${esc(p.current_step || book.status)} (${pct}%)</p>
+      ${p.total_chapters ? `<small style="color:var(--ash)">Chapters: ${p.chapters_completed || 0}/${p.total_chapters}</small>` : ''}
+      ${p.error ? `<p style="color:var(--status-error);margin-top:0.3rem">Error: ${esc(p.error)}</p>` : ''}
     </div>`;
   }
 
@@ -291,8 +319,8 @@ function renderDetail(book) {
     const entries = Object.entries(book.chapters);
     html += `<div class="modal-section"><h3>Chapters (${entries.length})</h3>`;
     for (const [title, content] of entries) {
-      html += `<details style="margin-bottom:.5rem"><summary style="cursor:pointer;font-weight:600;color:var(--text)">${esc(title)}</summary>
-        <pre style="margin-top:.3rem">${esc(content)}</pre></details>`;
+      html += `<details><summary>${esc(title)}</summary>
+        <pre>${esc(content)}</pre></details>`;
     }
     html += `</div>`;
   }
@@ -303,27 +331,26 @@ function renderDetail(book) {
   }
 
   // Actions
-  html += `<div class="modal-section" style="display:flex;gap:.5rem;flex-wrap:wrap">`;
+  html += `<div class="modal-section" style="display:flex;gap:0.5rem;flex-wrap:wrap">`;
   if (book.status === 'completed' || book.status === 'reviewed') {
-    html += `<a class="btn btn-primary btn-sm" href="${API}/books/${book.id}/export/epub">📥 EPUB</a>`;
-    html += `<a class="btn btn-secondary btn-sm" href="${API}/books/${book.id}/export/pdf">📥 PDF</a>`;
+    html += `<a class="btn btn-primary btn-sm" href="${API}/books/${book.id}/export/epub">Download EPUB</a>`;
+    html += `<a class="btn btn-secondary btn-sm" href="${API}/books/${book.id}/export/pdf">Download PDF</a>`;
   }
   if (book.status === 'completed') {
-    html += `<button class="btn btn-secondary btn-sm" data-action="review">🔍 Trigger Review</button>`;
+    html += `<button class="btn btn-secondary btn-sm" data-action="review">Trigger Review</button>`;
   }
   if (book.status === 'failed') {
-    html += `<button class="btn btn-secondary btn-sm" data-action="retry">🔄 Retry</button>`;
+    html += `<button class="btn btn-secondary btn-sm" data-action="retry">Retry</button>`;
   }
-  html += `<button class="btn btn-secondary btn-sm" data-action="delete" style="color:var(--red);border-color:var(--red)">🗑 Delete</button>`;
+  html += `<button class="btn btn-secondary btn-sm" data-action="delete" style="color:var(--status-error);border-color:var(--status-error)">Delete</button>`;
   html += `</div>`;
 
-  return html;
-}
+  return html;}
 
 /* ── Review Section Renderer ───────────────────────────────────── */
 function buildReviewSection(review, history) {
   let html = `<div class="review-section">`;
-  html += `<h3>📝 Review Results</h3>`;
+  html += `<h3>Review Results</h3>`;
 
   const score = review.overall_score ?? 0;
   const verdict = review.verdict || 'unknown';
@@ -331,41 +358,41 @@ function buildReviewSection(review, history) {
   const passClass = verdict === 'ready' ? 'passed' : 'failed';
 
   html += `<div class="review-score ${scoreClass}">${score}/10</div>`;
-  html += `<div class="review-verdict ${passClass}">${verdict === 'ready' ? '✅ Approved' : '❌ Needs Revision'}</div>`;
+  html += `<div class="review-verdict ${passClass}">${verdict === 'ready' ? 'Approved' : 'Needs Revision'}</div>`;
 
   if (review.max_turns_reached) {
-    html += `<p style="color:var(--orange);text-align:center;font-size:.85rem;margin-bottom:.5rem">
-      ⚠️ Max turns reached — some issues may remain</p>`;
+    html += `<p style="color:var(--brass);text-align:center;font-size:0.85rem;margin-bottom:0.5rem">
+      Max turns reached — some issues may remain</p>`;
   }
 
   if (review.critique) {
-    html += `<details style="margin-top:.5rem"><summary style="cursor:pointer;color:var(--muted);font-size:.85rem">View Full Critique</summary>
+    html += `<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-family:var(--body-font);color:var(--ash);font-size:0.85rem;font-weight:500">View Full Critique</summary>
       <div class="review-critique">${esc(review.critique)}</div></details>`;
   }
 
   // Correction audit trail
   if (review.corrections && review.corrections.length) {
-    html += `<h4 style="margin-top:.8rem;font-size:.9rem;color:var(--text)">Corrections Applied</h4>`;
+    html += `<h4 style="margin-top:0.8rem;font-size:0.9rem;color:var(--ink)">Corrections Applied</h4>`;
     for (const c of review.corrections) {
       html += `<div class="correction-item">
         <span class="corr-chapter">${esc(c.chapter)}</span>
         <span class="corr-type">[${esc(c.issue_type)}]</span>
-        <div style="margin-top:.2rem;font-size:.8rem;color:var(--muted)">${esc(c.issue_description)}</div>
+        <div style="margin-top:0.2rem;font-size:0.8rem;color:var(--ash)">${esc(c.issue_description)}</div>
       </div>`;
     }
   }
 
   // Iteration history
   if (history && history.length > 1) {
-    html += `<h4 style="margin-top:1rem;font-size:.9rem;color:var(--text)">Review History (${history.length} turns)</h4>`;
+    html += `<h4 style="margin-top:1rem;font-family:var(--display-font);font-size:15px;font-weight:600;color:var(--ink)">Review History (${history.length} turns)</h4>`;
     for (const turn of history) {
       const tScore = turn.overall_score ?? '?';
       const tVerdict = turn.verdict || '?';
       const tScoreClass = tScore >= 7 ? 'good' : tScore >= 4 ? 'ok' : 'bad';
       const tPassClass = tVerdict === 'ready' ? 'passed' : 'failed';
-      html += `<div style="background:var(--surface);padding:.5rem .7rem;border-radius:6px;margin-bottom:.3rem;font-size:.85rem">
-        <strong>Turn ${turn.turn}</strong>: Score <span class="review-score ${tScoreClass}" style="font-size:1rem;display:inline">${tScore}/10</span>
-        — <span class="review-verdict ${tPassClass}" style="font-size:.85rem">${tVerdict}</span>
+      html += `<div style="background:var(--page);padding:0.5rem 0.7rem;border:1px solid var(--vellum);border-radius:0;margin-bottom:0.3rem;font-size:13px">
+        <span style="font-family:var(--body-font);font-weight:600">Turn ${turn.turn}</span>: Score <span class="review-score ${tScoreClass}" style="font-size:14px;font-family:var(--display-font);font-weight:700;display:inline">${tScore}/10</span>
+        — <span class="review-verdict ${tPassClass}" style="font-size:0.85rem">${tVerdict}</span>
         ${turn.corrections && turn.corrections.length ? `(${turn.corrections.length} corrections)` : ''}
       </div>`;
     }

@@ -31,17 +31,18 @@ function esc(s) {
 
 /* ── Status Badge ──────────────────────────────────────────────── */
 function statusBadge(status) {
-  const cls = {
-    pending: 'badge-pending',
-    summary_generated: 'badge-summary_generated',
-    outline_generated: 'badge-outline_generated',
-    in_progress: 'badge-in_progress',
-    completed: 'badge-completed',
-    reviewing: 'badge-reviewing',
-    reviewed: 'badge-reviewed',
-    failed: 'badge-failed',
+  const textMap = {
+    pending: 'pending',
+    summary_generated: 'summary',
+    outline_generated: 'outline',
+    in_progress: 'in progress',
+    completed: 'completed',
+    reviewing: 'reviewing',
+    reviewed: 'reviewed',
+    failed: 'failed',
   };
-  return `<span class="badge ${cls[status] || 'badge-pending'}">${status.replace(/_/g,' ')}</span>`;
+  const label = textMap[status] || status.replace(/_/g, ' ');
+  return `<span class="status-label status-${status}">${label}</span>`;
 }
 
 /* ── Progress Polling ──────────────────────────────────────────── */

@@ -106,9 +106,9 @@ async function saveConfig() {
       reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || '',
       reviewer_api_key: $('cfgReviewerApiKey').value.trim() || '',
       reviewer_model_name: $('cfgReviewerModel').value.trim() || '',
-      review_max_turns: parseInt($('cfgMaxTurns').value),
-      review_word_threshold: parseInt($('cfgWordThreshold').value),
-      review_chunk_size: parseInt($('cfgChunkSize').value),
+      review_max_turns: parseInt($('cfgMaxTurns')?.value) || 2,
+      review_word_threshold: parseInt($('cfgWordThreshold')?.value) || 30000,
+      review_chunk_size: parseInt($('cfgChunkSize')?.value) || 5,
     };
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
     toast('Configuration saved!', 'success');
@@ -147,9 +147,9 @@ async function saveSetupConfig() {
     reviewer_endpoint_url: $('setupReviewerEndpoint').value.trim() || null,
     reviewer_api_key: $('setupReviewerApiKey').value.trim() || null,
     reviewer_model_name: $('setupReviewerModel').value.trim() || null,
-    review_max_turns: parseInt($('setupMaxTurns').value),
-    review_word_threshold: parseInt($('setupWordThreshold').value),
-    review_chunk_size: parseInt($('setupChunkSize').value),
+    review_max_turns: parseInt($('setupMaxTurns')?.value) || 2,
+    review_word_threshold: parseInt($('setupWordThreshold')?.value) || 30000,
+    review_chunk_size: parseInt($('setupChunkSize')?.value) || 5,
   };
 
   try {

@@ -21,10 +21,9 @@
     </div>
 
     <div class="setup-form">
-      <!-- Connection -->
+      <!-- Step 1: Connection -->
       <div class="setup-section">
-        <div class="section-icon">🔗</div>
-        <h3>Connection</h3>
+        <h3><span class="step-number">1</span> Connection</h3>
         <div class="field">
           <label for="setupEndpoint">Endpoint URL</label>
           <input id="setupEndpoint" type="url" placeholder="http://192.168.0.40:1234 or https://api.openai.com">
@@ -36,10 +35,9 @@
         </div>
       </div>
 
-      <!-- Model -->
+      <!-- Step 2: Model -->
       <div class="setup-section">
-        <div class="section-icon">🤖</div>
-        <h3>Writer Model</h3>
+        <h3><span class="step-number">2</span> Writer Model</h3>
         <div class="field">
           <label for="setupModel">Model Name</label>
           <div class="input-row">
@@ -53,10 +51,9 @@
         <div id="setupModelList" class="model-list" style="display:none"></div>
       </div>
 
-      <!-- Reviewer (optional) -->
+      <!-- Step 3: Reviewer (optional) -->
       <div class="setup-section">
-        <div class="section-icon">📝</div>
-        <h3>Reviewer Model <span class="optional-badge">Optional</span></h3>
+        <h3><span class="step-number">3</span> Reviewer Model <span class="optional-badge">Optional</span></h3>
         <div class="field">
           <label for="setupReviewerEndpoint">Reviewer Endpoint</label>
           <input id="setupReviewerEndpoint" type="url" placeholder="Leave empty to use writer endpoint">
@@ -77,10 +74,9 @@
         </div>
       </div>
 
-      <!-- Review Settings -->
+      <!-- Step 4: Review Settings -->
       <div class="setup-section">
-        <div class="section-icon">🔍</div>
-        <h3>Review Settings</h3>
+        <h3><span class="step-number">4</span> Review Settings</h3>
         <div class="field">
           <label for="setupMaxTurns">Max Review Turns</label>
           <select id="setupMaxTurns">
@@ -106,7 +102,7 @@
 
       <div class="setup-actions">
         <button class="btn btn-primary btn-lg" id="setupSaveBtn">
-          Save & Start Creating
+          Save &amp; Start Creating
         </button>
       </div>
     </div>
@@ -115,9 +111,9 @@
 
 <!-- ── Header ──────────────────────────────────────────────────── -->
 <header class="header" id="header">
-  <h1>Hullucinator <span>AI E-Book Generator</span></h1>
+  <h1>Hullucinator <span>· AI E-Book Generator</span></h1>
   <div class="header-actions">
-    <button class="icon-btn" id="settingsBtn" title="AI Settings">⚙</button>
+    <button class="icon-btn" id="settingsBtn" title="AI Settings">Settings</button>
   </div>
 </header>
 
@@ -126,7 +122,7 @@
 
   <!-- Create Book Form -->
   <div class="card" id="createCard">
-    <h2>Create New Book</h2>
+    <h2>New Manuscript</h2>
     <form id="createForm">
 
       <label for="title">Book Title</label>
@@ -134,6 +130,7 @@
 
       <label for="prompt">Prompt / Concept</label>
       <textarea id="prompt" placeholder="Describe the book you want to generate — genre, themes, key plot points..." required></textarea>
+      <div class="field-hint" id="promptCounter">0 characters</div>
 
       <label>Tags (genre, themes)</label>
       <div class="tags-row">
@@ -174,8 +171,8 @@
     <h2>Your Library</h2>
     <div id="booksList" class="book-list">
       <div class="empty-state">
-        <p class="empty-icon">📖</p>
-        <p>No books yet. Create one above!</p>
+        <hr>
+        <p>Your shelves are empty. Submit your first manuscript above.</p>
       </div>
     </div>
   </div>
@@ -186,7 +183,7 @@
   <div class="modal">
     <div class="modal-header">
       <h2 id="detailTitle"></h2>
-      <button class="modal-close" id="detailClose">&times;</button>
+      <button class="modal-close" id="detailClose">✕</button>
     </div>
     <div id="detailContent"></div>
   </div>
@@ -195,7 +192,7 @@
 <!-- ── Settings Panel (slide-out, for already-configured users) ── -->
 <div class="settings-overlay" id="settingsOverlay"></div>
 <div class="settings-panel" id="settingsPanel">
-  <button class="close-btn" id="settingsClose">&times;</button>
+  <button class="close-btn" id="settingsClose">✕</button>
   <h2>Configuration</h2>
 
   <!-- Connection (shared) -->

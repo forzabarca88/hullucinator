@@ -11,7 +11,7 @@ from typing import List, Dict, Optional, Any
 class BookState(BaseModel):
     id: str
     title: str = Field(..., max_length=200)
-    prompt: str = Field(..., max_length=5000)
+    prompt: str = Field(..., min_length=1)
     tags: list[str] = []
     length: str = "novel"  # short_story | novella | novel | epic
     status: str  # pending | summary_generated | outline_generated | in_progress | completed | reviewing | reviewed | failed
@@ -43,8 +43,8 @@ class BookState(BaseModel):
 
 
 class BookCreateRequest(BaseModel):
-    title: str = Field(..., max_length=200)
-    prompt: str = Field(..., max_length=5000)
+    title: str = Field(..., min_length=1, max_length=200)
+    prompt: str = Field(..., min_length=1)
     tags: list[str] = []
     length: str = "novel"
     # Maximum review-correction turns (overrides global default)
