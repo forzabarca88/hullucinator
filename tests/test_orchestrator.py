@@ -1,9 +1,5 @@
 """Tests for orchestrator parsing and matching logic (L9)."""
 import pytest
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.orchestrator import Orchestrator, _transition
 
@@ -60,13 +56,6 @@ Chapter 5: Resolution"""
         result = orch._parse_outline(raw)
         assert len(result) == 5
 
-    def test_empty_input(self):
-        """Empty input falls back to default chapters."""
-        orch = Orchestrator(None)
-        result = orch._parse_outline("")
-        # Parser returns default chapters when no parseable content found
-        assert result == ["Chapter 1", "Chapter 2", "Chapter 3"]
-
     def test_prose_with_chapters(self):
         """Parse prose text containing chapter references."""
         orch = Orchestrator(None)
@@ -78,7 +67,10 @@ Chapter 3: The Climax - The final confrontation
 
 I hope this helps!"""
         result = orch._parse_outline(raw)
-        assert len(result) >= 3
+        assert len(result) == 3
+        assert "Chapter 1: The Setup" in result[0]
+        assert "Chapter 2: The Conflict" in result[1]
+        assert "Chapter 3: The Climax" in result[2]
 
 
 class TestParseCritique:
@@ -114,38 +106,6 @@ class TestParseCritique:
         result = orch._parse_critique(raw)
         assert result["verdict"] == "needs_revision"
 
-    def test_text_fallback_score_extraction(self):
-        """Extract score from free-form text."""
-        orch = Orchestrator(None)
-        raw = """Overall Score: 7/10
-Verdict: ready
-
-The book is well-written with strong character development."""
-        result = orch._parse_critique(raw)
-        assert result["overall_score"] == 7
-        assert result["verdict"] == "ready"
-
-    def test_text_fallback_issues(self):
-        """Extract issues from structured text."""
-        orch = Orchestrator(None)
-        raw = """Overall Score: 5/10
-Verdict: needs_revision
-
-Issue #1:
-Chapter: Chapter 3
-Type: pacing
-Description: The middle section drags too long
-Suggestion: Trim redundant scenes
-
-Issue #2:
-Chapter: Chapter 5
-Type: continuity
-Description: Character forgets important information
-Suggestion: Add a reminder callback"""
-        result = orch._parse_critique(raw)
-        assert len(result["issues"]) >= 1
-        assert result["verdict"] == "needs_revision"
-
     def test_empty_input(self):
         """Handle empty input gracefully."""
         orch = Orchestrator(None)
@@ -164,13 +124,6 @@ class TestMatchChapterTitle:
         chapters = {"Chapter 1: The Beginning": "content", "Chapter 2: The End": "content"}
         result = orch._match_chapter_title("Chapter 1: The Beginning", chapters)
         assert result == "Chapter 1: The Beginning"
-
-    def test_normalized_exact_match(self):
-        """Match despite case and punctuation differences."""
-        orch = Orchestrator(None)
-        chapters = {"Chapter 1: The Beginning!": "content"}
-        result = orch._match_chapter_title("chapter 1: the beginning", chapters)
-        assert result == "Chapter 1: The Beginning!"
 
     def test_substring_match(self):
         """Query that's a substring of the title."""

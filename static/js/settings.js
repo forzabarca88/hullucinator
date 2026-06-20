@@ -3,6 +3,10 @@
 let appConfigured = false;
 
 function initSettings() {
+  renderLengthSelect($('setupLength'));
+  renderMaxTurnsSelect($('setupMaxTurns'));
+  renderMaxTurnsSelect($('cfgMaxTurns'));
+
   $('settingsBtn').addEventListener('click', () => {
     $('settingsPanel').classList.add('active');
     $('settingsOverlay').classList.add('active');
@@ -47,8 +51,8 @@ async function checkConfig() {
       $('setupReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
       $('setupReviewerApiKey').value = '';  // never display saved key
       $('setupReviewerModel').value = cfg.reviewer_model_name || '';
-      $('setupMaxTurns').value = cfg.review_max_turns || 2;
-      $('setupWordThreshold').value = cfg.review_word_threshold || 30000;
+      $('setupMaxTurns').value = cfg.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
+      $('setupWordThreshold').value = cfg.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
       $('setupChunkSize').value = cfg.review_chunk_size || 5;
     } else {
       // Already configured — populate settings panel fields
@@ -56,8 +60,8 @@ async function checkConfig() {
       $('cfgWriterModel').value = cfg.model_name || '';
       $('cfgReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
       $('cfgReviewerModel').value = cfg.reviewer_model_name || '';
-      $('cfgMaxTurns').value = cfg.review_max_turns || 2;
-      $('cfgWordThreshold').value = cfg.review_word_threshold || 30000;
+      $('cfgMaxTurns').value = cfg.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
+      $('cfgWordThreshold').value = cfg.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
       $('cfgChunkSize').value = cfg.review_chunk_size || 5;
       // Load the library of existing books
       loadBooks();
@@ -87,8 +91,8 @@ async function loadConfig() {
     $('cfgReviewerEndpoint').value = cfg.reviewer_endpoint_url || '';
     $('cfgReviewerApiKey').value = '';  // never display saved key
     $('cfgReviewerModel').value = cfg.reviewer_model_name || '';
-    $('cfgMaxTurns').value = cfg.review_max_turns || 2;
-    $('cfgWordThreshold').value = cfg.review_word_threshold || 30000;
+    $('cfgMaxTurns').value = cfg.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
+    $('cfgWordThreshold').value = cfg.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
     $('cfgChunkSize').value = cfg.review_chunk_size || 5;
   } catch (err) {
     console.error('loadConfig error:', err);
@@ -106,8 +110,8 @@ async function saveConfig() {
       reviewer_endpoint_url: $('cfgReviewerEndpoint').value.trim() || '',
       reviewer_api_key: $('cfgReviewerApiKey').value.trim() || '',
       reviewer_model_name: $('cfgReviewerModel').value.trim() || '',
-      review_max_turns: parseInt($('cfgMaxTurns')?.value) || 2,
-      review_word_threshold: parseInt($('cfgWordThreshold')?.value) || 30000,
+      review_max_turns: parseInt($('cfgMaxTurns')?.value) ?? SHARED_CONFIG?.review?.max_turns_default ?? 2,
+      review_word_threshold: parseInt($('cfgWordThreshold')?.value) ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000,
       review_chunk_size: parseInt($('cfgChunkSize')?.value) || 5,
     };
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
@@ -147,8 +151,8 @@ async function saveSetupConfig() {
     reviewer_endpoint_url: $('setupReviewerEndpoint').value.trim() || null,
     reviewer_api_key: $('setupReviewerApiKey').value.trim() || null,
     reviewer_model_name: $('setupReviewerModel').value.trim() || null,
-    review_max_turns: parseInt($('setupMaxTurns')?.value) || 2,
-    review_word_threshold: parseInt($('setupWordThreshold')?.value) || 30000,
+    review_max_turns: parseInt($('setupMaxTurns')?.value) ?? SHARED_CONFIG?.review?.max_turns_default ?? 2,
+    review_word_threshold: parseInt($('setupWordThreshold')?.value) ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000,
     review_chunk_size: parseInt($('setupChunkSize')?.value) || 5,
   };
 
@@ -167,8 +171,8 @@ async function saveSetupConfig() {
     $('cfgWriterModel').value = res.config.model_name || '';
     $('cfgReviewerEndpoint').value = res.config.reviewer_endpoint_url || '';
     $('cfgReviewerModel').value = res.config.reviewer_model_name || '';
-    $('cfgMaxTurns').value = res.config.review_max_turns || 2;
-    $('cfgWordThreshold').value = res.config.review_word_threshold || 30000;
+    $('cfgMaxTurns').value = res.config.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
+    $('cfgWordThreshold').value = res.config.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
     $('cfgChunkSize').value = res.config.review_chunk_size || 5;
     if ($('maxTurns')) $('maxTurns').value = res.config.review_max_turns || 2;
 

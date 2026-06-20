@@ -1,9 +1,6 @@
 """Frontend integrity tests — catch CSP and path bugs at test time."""
 import re
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 

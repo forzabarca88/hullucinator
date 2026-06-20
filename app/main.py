@@ -39,10 +39,11 @@ def _safe_download_name(title: str) -> str:
     return safe or 'untitled'
 
 from app.schemas import BookState, BookCreateRequest, AIConfig
-from app.ai_client import AIClient, ReviewerClient
+from app.ai_client import AIClient, ReviewerClient, _parse_models_response, _build_api_url
 from app.orchestrator import Orchestrator
 from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
 from app.exporter import export_to_epub, export_to_pdf
+from app.config import get_default_shared_config
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -118,7 +119,15 @@ _active_tasks: dict[str, "asyncio.Task"] = {}
 
 # Concurrency limiter: controls how many books can be generated simultaneously
 MAX_CONCURRENT_GENERATIONS = int(os.environ.get("HULLUCINATOR_MAX_CONCURRENT", "5"))
-_generation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+_generation_semaphore: asyncio.Semaphore | None = None
+
+
+async def _get_semaphore() -> asyncio.Semaphore:
+    """Get or create the generation semaphore, lazily bound to current event loop."""
+    global _generation_semaphore
+    if _generation_semaphore is None:
+        _generation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GENERATIONS)
+    return _generation_semaphore
 
 
 def _check_configured():
@@ -339,6 +348,17 @@ async def health_check():
     return {"status": "healthy", "service": "hullucinator", "configured": server_config.configured}
 
 
+@app.get("/api/config-schema")
+async def get_config_schema():
+    """Return the shared configuration schema for frontend consumption.
+
+    This is the single source of truth for all tunable parameters.
+    Frontend reads this to populate dropdowns, defaults, and thresholds.
+    """
+    config = get_default_shared_config()
+    return config.model_dump()
+
+
 # ── AI Configuration Endpoints ──────────────────────────────────────────
 
 @app.get("/api/config")
@@ -490,8 +510,7 @@ async def list_reviewer_models(
 
     # Setup wizard: make a direct request without modifying client state
     if endpoint_url:
-        url = endpoint_url.rstrip('/')
-        url = f"{url}/models" if url.endswith('/v1') else f"{url}/v1/models"
+        url = _build_api_url(endpoint_url, "models")
         headers = ai_client._headers
         if api_key:
             headers = {**headers, "Authorization": f"Bearer {api_key}"}
@@ -514,24 +533,6 @@ async def list_reviewer_models(
         )
     models = await reviewer_client.list_models()
     return {"models": models, "current_model": reviewer_client.model_name or "", "uses_writer": False}
-
-
-def _parse_models_response(result: dict) -> list:
-    """Parse OpenAI-compatible /v1/models response."""
-    models = []
-    if "data" in result:
-        for item in result["data"]:
-            models.append({
-                "id": item.get("id", item.get("name", "")),
-                "name": item.get("id", item.get("name", "")),
-            })
-    elif isinstance(result, list):
-        for item in result:
-            models.append({
-                "id": item.get("id", item.get("name", "")),
-                "name": item.get("id", item.get("name", "")),
-            })
-    return models
 
 
 # ── Book Endpoints ──────────────────────────────────────────────────────
@@ -564,7 +565,7 @@ async def create_book(request: BookCreateRequest, background_tasks: BackgroundTa
 
     # Start generation as a background task (with concurrency limit)
     async def _semaphore_task():
-        async with _generation_semaphore:
+        async with await _get_semaphore():
             await _run_generation_pipeline(book_id)
 
     task = asyncio.create_task(_semaphore_task())
@@ -637,7 +638,7 @@ async def trigger_review(book_id: str, background_tasks: BackgroundTasks):
         )
 
     async def _run_review():
-        async with _generation_semaphore:
+        async with await _get_semaphore():
             try:
                 # Reload to get latest state
                 book = load_book(book_id)
@@ -701,6 +702,74 @@ async def export_book(book_id: str, fmt: str):
     except Exception as e:
         logger.error("Export failed for book %s: %s", book_id, e)
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+# ── Retry Book ──────────────────────────────────────────────────
+
+@app.post("/api/books/{book_id}/retry")
+async def retry_book_endpoint(book_id: str, background_tasks: BackgroundTasks):
+    """Retry a failed book by creating a new one with the same parameters.
+
+    Loads the failed book's fields, constructs a new BookCreateRequest,
+    queues generation in the background, and deletes the old book.
+    """
+    _check_configured()
+
+    book_state = load_book(book_id)
+    if not book_state:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    # Cancel any active generation task for this book
+    task = _active_tasks.pop(book_id, None)
+    if task and not task.done():
+        task.cancel()
+        logger.info("Cancelled active generation task for book '%s' (%s)", book_state.title, book_id)
+
+    # Build a new BookCreateRequest from the old book's fields
+    request = BookCreateRequest(
+        title=book_state.title,
+        prompt=book_state.prompt,
+        tags=book_state.tags,
+        length=book_state.length,
+        review_max_turns=book_state.review_max_turns,
+        skip_review=book_state.skip_review,
+    )
+
+    # Create new book
+    new_book_id = str(uuid.uuid4())
+    new_book_state = BookState(
+        id=new_book_id,
+        title=request.title,
+        prompt=request.prompt,
+        tags=request.tags,
+        length=request.length,
+        status="pending",
+        review_max_turns=request.review_max_turns,
+        skip_review=request.skip_review,
+        progress={"current_step": "pending", "total_chapters": 0, "chapters_completed": 0, "percentage": 0},
+    )
+    save_book(new_book_id, new_book_state)
+
+    # Start generation as background task
+    async def _semaphore_task():
+        async with await _get_semaphore():
+            await _run_generation_pipeline(new_book_id)
+
+    task = asyncio.create_task(_semaphore_task())
+    _active_tasks[new_book_id] = task
+
+    # Delete the old book
+    delete_book(book_id)
+
+    logger.info("Retry: created new book '%s' (%s) from failed book '%s' (%s)",
+                new_book_state.title, new_book_id, book_state.title, book_id)
+    return {
+        "book_id": new_book_id,
+        "status": "pending",
+        "old_book_id": book_id,
+        "review_max_turns": request.review_max_turns,
+        "skip_review": request.skip_review,
+    }
 
 
 # ── Delete Book ─────────────────────────────────────────────────

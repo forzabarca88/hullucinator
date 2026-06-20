@@ -17,20 +17,15 @@ import re
 import json
 from typing import List, Optional
 
-from app.ai_client import AIClient, ReviewerClient
+from app.ai_client import AIClient, ReviewerClient, _extract_content, _build_api_url
 from app.storage import save_book, load_config
 from app.schemas import BookState
+from app.config import get_default_shared_config
 
 logger = logging.getLogger(__name__)
 
-
-def _extract_content(result: dict) -> str:
-    """Extract text content from an LLM response, handling both string and list formats."""
-    raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if isinstance(raw, list):
-        parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
-        return "\n".join(parts).strip()
-    return str(raw).strip()
+# Shared config — single source of truth for all tunable parameters
+_shared_config = get_default_shared_config()
 
 
 # Valid status transition graph
@@ -46,25 +41,20 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
 }
 
 
-# Length-to-chapter-count guidance
+# Length-to-chapter-count guidance (derived from shared config)
 LENGTH_CHAPTER_COUNT: dict[str, str] = {
-    "short_story": "1",
-    "novella": "3-5",
-    "novel": "8-15",
-    "epic": "15-25",
+    l.key: l.chapter_range for l in _shared_config.lengths
 }
 
-# Length-to-word-count guidance
+# Length-to-word-count guidance (derived from shared config)
 LENGTH_WORD_COUNT: dict[str, str] = {
-    "short_story": "1,000-7,500",
-    "novella": "7,500-20,000",
-    "novel": "20,000-50,000",
-    "epic": "50,000+",
+    l.key: l.word_range for l in _shared_config.lengths
 }
 
-# Review thresholds - switch to chunked review for long books
-REVIEW_WORD_THRESHOLD = 30_000  # words before chunked review is used
-REVIEW_CHUNK_SIZE = 5  # chapters per review chunk
+# Review thresholds from shared config
+REVIEW_PASS_SCORE = _shared_config.review.pass_score
+REVIEW_WORD_THRESHOLD = _shared_config.review.word_threshold_default
+REVIEW_CHUNK_SIZE = _shared_config.review.chunk_size_default
 
 
 def _transition(book_state: BookState, new_status: str):
@@ -79,6 +69,105 @@ def _transition(book_state: BookState, new_status: str):
             f"Allowed: {allowed}"
         )
     book_state.status = new_status
+
+
+def _update_progress(book_state: BookState, step: str, percentage: int,
+                     total_chapters: Optional[int] = None,
+                     chapters_completed: Optional[int] = None):
+    """Update progress tracking and persist to disk."""
+    book_state.progress["current_step"] = step
+    book_state.progress["percentage"] = percentage
+    if total_chapters is not None:
+        book_state.progress["total_chapters"] = total_chapters
+    if chapters_completed is not None:
+        book_state.progress["chapters_completed"] = chapters_completed
+    save_book(book_state.id, book_state)
+
+
+def _build_review_text(book_state: BookState, chapters: list, turn_num: int) -> str:
+    """Build the review prompt text for a set of chapters.
+
+    Args:
+        book_state: The book being reviewed.
+        chapters: List of (title, content) tuples to include in the review.
+        turn_num: Current review turn number (for prior history injection).
+
+    Returns:
+        Formatted review text string ready for the critique prompt.
+    """
+    tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+    review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+    review_text += f"Summary:\n{book_state.summary}\n\n"
+    review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
+
+    # Include chapter summaries for chapters NOT in this chunk (context)
+    chunk_titles = {t for t, _ in chapters}
+    other_summaries = []
+    if book_state.chapter_summaries:
+        for title, summary in book_state.chapter_summaries.items():
+            if title not in chunk_titles:
+                other_summaries.append(f"  • {title}: {summary}")
+    if other_summaries:
+        review_text += "Other chapter summaries (for context):\n" + "\n".join(other_summaries) + "\n\n"
+
+    # Include the actual content for chapters in this set
+    for idx, (title, content_text) in enumerate(chapters, 1):
+        review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content_text}"
+
+    # If this is turn > 1, include prior review results for context
+    if turn_num > 1 and book_state.review_history:
+        review_text += "\n\n--- Previous Review History ---\n"
+        for prev in book_state.review_history:
+            review_text += f"\nTurn {prev['turn']}:\n"
+            review_text += f"  Score: {prev.get('overall_score', '?')}/10\n"
+            review_text += f"  Verdict: {prev.get('verdict', '?')}\n"
+            if prev.get('corrections'):
+                for corr in prev['corrections']:
+                    review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
+
+    return review_text
+
+
+def _build_revision_context(book_state: BookState, chapter_title: str) -> tuple:
+    """Build the revision prompt context for a single chapter.
+
+    Args:
+        book_state: The book being revised.
+        chapter_title: Title of the chapter to revise.
+
+    Returns:
+        (system_prompt, user_prompt) tuple ready for the revision request.
+    """
+    tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
+
+    # Build prior chapter summaries for context
+    prior_context = ""
+    if book_state.chapter_summaries:
+        prior_parts = []
+        for outline_title in book_state.outline:
+            if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
+                prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
+        if prior_parts:
+            prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
+
+    system_prompt = (
+        "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
+        "the specific issues identified while preserving the core narrative and style. "
+        "Ensure consistency with the rest of the book."
+    )
+    user_prompt = (
+        f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
+        f"Book summary:\n{book_state.summary}\n\n"
+        + prior_context + "\n\n"
+    )
+    return system_prompt, user_prompt
+
+
+def _record_review_turn(book_state: BookState, turn_record: dict):
+    """Record a review turn in the audit trail and persist."""
+    book_state.review_history.append(turn_record)
+    book_state.review = turn_record
+    save_book(book_state.id, book_state)
 
 
 class Orchestrator:
@@ -155,9 +244,8 @@ class Orchestrator:
 
             # Update progress for UI
             if turn_num > 1:
-                book_state.progress["current_step"] = f"reviewing (turn {turn_num})"
-                book_state.progress["percentage"] = 97 + int((turn_num - 1) / turns_limit * 3)
-                save_book(book_state.id, book_state)
+                _update_progress(book_state, f"reviewing (turn {turn_num})",
+                                 97 + int((turn_num - 1) / turns_limit * 3))
 
             # Review each chunk
             turn_issues = []
@@ -165,35 +253,8 @@ class Orchestrator:
             turn_corrections = []
 
             for chunk_idx, chunk in enumerate(chunks):
-                # Build review text for this chunk
-                review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-                review_text += f"Summary:\n{book_state.summary}\n\n"
-                review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
-
-                # Include chapter summaries for chapters NOT in this chunk (context)
-                other_summaries = []
-                chunk_titles = {t for t, _ in chunk}
-                if book_state.chapter_summaries:
-                    for title, summary in book_state.chapter_summaries.items():
-                        if title not in chunk_titles:
-                            other_summaries.append(f"  • {title}: {summary}")
-                if other_summaries:
-                    review_text += "Other chapter summaries (for context):\n" + "\n".join(other_summaries) + "\n\n"
-
-                # Include the actual content for chapters in this chunk
-                for idx, (title, content_text) in enumerate(chunk, 1):
-                    review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content_text}"
-
-                # If this is turn > 1, include prior review results for context
-                if turn_num > 1 and book_state.review_history:
-                    review_text += "\n\n--- Previous Review History ---\n"
-                    for prev in book_state.review_history:
-                        review_text += f"\nTurn {prev['turn']}:\n"
-                        review_text += f"  Score: {prev.get('overall_score', '?')}/10\n"
-                        review_text += f"  Verdict: {prev.get('verdict', '?')}\n"
-                        if prev.get('corrections'):
-                            for corr in prev['corrections']:
-                                review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
+                # Build review text for this chunk (using shared helper)
+                review_text = _build_review_text(book_state, chunk, turn_num)
 
                 # Critique this chunk
                 critique_messages = [
@@ -246,26 +307,11 @@ class Orchestrator:
                     description = issue.get("description", "")
                     suggestion = issue.get("suggestion", "")
 
-                    # Build revision context with summaries of other chapters
-                    prior_context = ""
-                    if book_state.chapter_summaries:
-                        prior_parts = []
-                        for outline_title in book_state.outline:
-                            if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
-                                prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
-                        if prior_parts:
-                            prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
-
+                    revision_sys, revision_user = _build_revision_context(book_state, chapter_title)
                     revision_messages = [
-                        {"role": "system", "content": (
-                            "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
-                            "the specific issues identified while preserving the core narrative and style. "
-                            "Ensure consistency with the rest of the book."
-                        )},
+                        {"role": "system", "content": revision_sys},
                         {"role": "user", "content": (
-                            f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-                            f"Book summary:\n{book_state.summary}\n\n"
-                            + prior_context + "\n\n"
+                            revision_user +
                             f"Issue identified in '{chapter_title}':\n"
                             f"  Type: {issue.get('type', 'general')}\n"
                             f"  Problem: {description}\n"
@@ -294,20 +340,17 @@ class Orchestrator:
 
             # Aggregate results for this turn
             avg_score = int(sum(turn_scores) / len(turn_scores)) if turn_scores else 5
-            overall_verdict = "ready" if all(s >= 7 for s in turn_scores) else "needs_revision"
+            overall_verdict = "ready" if all(s >= REVIEW_PASS_SCORE for s in turn_scores) else "needs_revision"
 
-            # Record this turn in history
-            turn_record = {
+            # Record this turn in history (using shared helper)
+            _record_review_turn(book_state, {
                 "turn": turn_num,
                 "critique": f"Chunked review: {len(chunks)} chunks, avg score {avg_score}/10",
                 "issues": turn_issues,
                 "overall_score": avg_score,
                 "verdict": overall_verdict,
                 "corrections": turn_corrections,
-            }
-            book_state.review_history.append(turn_record)
-            book_state.review = turn_record
-            save_book(book_state.id, book_state)
+            })
 
             logger.info("Turn %d complete: avg_score=%d, verdict=%s, %d corrections",
                        turn_num, avg_score, overall_verdict, len(turn_corrections))
@@ -318,9 +361,7 @@ class Orchestrator:
                            book_state.title, turn_num, avg_score)
                 book_state.review["reviewed"] = True
                 _transition(book_state, "reviewed")
-                book_state.progress["current_step"] = "reviewed"
-                book_state.progress["percentage"] = 100
-                save_book(book_state.id, book_state)
+                _update_progress(book_state, "reviewed", 100)
                 return book_state.review_history
 
         # Max turns reached without passing
@@ -329,9 +370,7 @@ class Orchestrator:
         book_state.review["max_turns_reached"] = True
         book_state.review["message"] = f"Review completed after {turns_limit} turns. Some issues may remain."
         _transition(book_state, "reviewed")
-        book_state.progress["current_step"] = "reviewed"
-        book_state.progress["percentage"] = 100
-        save_book(book_state.id, book_state)
+        _update_progress(book_state, "reviewed", 100)
 
         return book_state.review_history
 
@@ -365,10 +404,7 @@ class Orchestrator:
 
         book_state.summary = summary
         _transition(book_state, "summary_generated")
-        book_state.progress["current_step"] = "summary_generated"
-        book_state.progress["percentage"] = 25
-
-        save_book(book_state.id, book_state)
+        _update_progress(book_state, "summary_generated", 25)
         return summary
 
     def _parse_outline(self, outline_content: str) -> List[str]:
@@ -489,11 +525,7 @@ class Orchestrator:
         book_state.outline = outline
         book_state.chapter_summaries = {}  # Initialize for continuity tracking
         _transition(book_state, "outline_generated")
-        book_state.progress["current_step"] = "outline_generated"
-        book_state.progress["total_chapters"] = len(outline)
-        book_state.progress["percentage"] = 50
-
-        save_book(book_state.id, book_state)
+        _update_progress(book_state, "outline_generated", 50, total_chapters=len(outline))
         return outline
 
     async def _generate_chapter(self, book_state: BookState, idx: int, chapter_title: str, total: int) -> str:
@@ -580,8 +612,7 @@ class Orchestrator:
         _transition(book_state, "in_progress")
         book_state.chapters = {}
         book_state.chapter_summaries = book_state.chapter_summaries or {}
-        book_state.progress["current_step"] = "in_progress"
-        book_state.progress["chapters_completed"] = 0
+        _update_progress(book_state, "in_progress", 50, chapters_completed=0)
 
         total = len(book_state.outline)
         for idx, chapter_title in enumerate(book_state.outline, 1):
@@ -596,14 +627,12 @@ class Orchestrator:
             logger.info("Chapter %d summary: %s", idx, chapter_summary[:80] + "...")
 
             # Update progress
-            book_state.progress["chapters_completed"] = idx
-            book_state.progress["percentage"] = 50 + int((idx / total) * 45)  # Reserve 5% for review
-            save_book(book_state.id, book_state)
+            _update_progress(book_state, "in_progress",
+                             50 + int((idx / total) * 45),  # Reserve 5% for review
+                             chapters_completed=idx)
 
         _transition(book_state, "completed")
-        book_state.progress["current_step"] = "completed"
-        book_state.progress["percentage"] = 95
-        save_book(book_state.id, book_state)
+        _update_progress(book_state, "completed", 95)
 
         return book_state.chapters
 
@@ -627,9 +656,7 @@ class Orchestrator:
 
         if book_state.status == "completed":
             _transition(book_state, "reviewing")
-            book_state.progress["current_step"] = "reviewing"
-            book_state.progress["percentage"] = 97
-            save_book(book_state.id, book_state)
+            _update_progress(book_state, "reviewing", 97)
 
         tags_str = ", ".join(book_state.tags) if book_state.tags else "none specified"
         reviewer = self._get_reviewer()
@@ -654,28 +681,11 @@ class Orchestrator:
 
             # Update progress for UI
             if turn_num > 1:
-                book_state.progress["current_step"] = f"reviewing (turn {turn_num})"
-                book_state.progress["percentage"] = 97 + int((turn_num - 1) / turns_limit * 3)
-                save_book(book_state.id, book_state)
+                _update_progress(book_state, f"reviewing (turn {turn_num})",
+                                 97 + int((turn_num - 1) / turns_limit * 3))
 
-            # Build the full book text for review
-            review_text = f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-            review_text += f"Summary:\n{book_state.summary}\n\n"
-            review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book_state.outline)) + "\n\n"
-
-            for idx, (title, content) in enumerate(book_state.chapters.items(), 1):
-                review_text += f"\n{'='*60}\nChapter {idx}: {title}\n{'='*60}\n{content}"
-
-            # If this is turn > 1, include prior review results for context
-            if turn_num > 1 and book_state.review_history:
-                review_text += "\n\n--- Previous Review History ---\n"
-                for prev in book_state.review_history:
-                    review_text += f"\nTurn {prev['turn']}:\n"
-                    review_text += f"  Score: {prev.get('overall_score', '?')}/10\n"
-                    review_text += f"  Verdict: {prev.get('verdict', '?')}\n"
-                    if prev.get('corrections'):
-                        for corr in prev['corrections']:
-                            review_text += f"  Corrected: '{corr['chapter']}' ({corr['issue_type']})\n"
+            # Build the full book text for review (using shared helper)
+            review_text = _build_review_text(book_state, list(book_state.chapters.items()), turn_num)
 
             # Step 1: Professional critique (using reviewer client)
             critique_messages = [
@@ -691,7 +701,7 @@ class Orchestrator:
                     "Return your review as a JSON object with this exact structure:\n"
                     '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
                     "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
-                    "If the book is solid (score >= 7), set verdict to 'ready' with an empty issues array."
+                    "If the book is solid (score >= {REVIEW_PASS_SCORE}), set verdict to 'ready' with an empty issues array."
                 )},
                 {"role": "user", "content": review_text},
             ]
@@ -728,26 +738,11 @@ class Orchestrator:
                     description = issue.get("description", "")
                     suggestion = issue.get("suggestion", "")
 
-                    # Build revision context
-                    prior_context = ""
-                    if book_state.chapter_summaries:
-                        prior_parts = []
-                        for outline_title in book_state.outline:
-                            if outline_title in book_state.chapter_summaries and outline_title != chapter_title:
-                                prior_parts.append(f"  • {outline_title}: {book_state.chapter_summaries[outline_title]}")
-                        if prior_parts:
-                            prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
-
+                    revision_sys, revision_user = _build_revision_context(book_state, chapter_title)
                     revision_messages = [
-                        {"role": "system", "content": (
-                            "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
-                            "the specific issues identified while preserving the core narrative and style. "
-                            "Ensure consistency with the rest of the book."
-                        )},
+                        {"role": "system", "content": revision_sys},
                         {"role": "user", "content": (
-                            f"Book: {book_state.title}\nGenre: {tags_str}\n\n"
-                            f"Book summary:\n{book_state.summary}\n\n"
-                            + prior_context + "\n\n"
+                            revision_user +
                             f"Issue identified in '{chapter_title}':\n"
                             f"  Type: {issue.get('type', 'general')}\n"
                             f"  Problem: {description}\n"
@@ -781,20 +776,15 @@ class Orchestrator:
             else:
                 logger.info("Turn %d: Book passed review (score: %d/10)", turn_num, overall_score)
 
-            # Record this turn in history
-            turn_record = {
+            # Record this turn in history (using shared helper)
+            _record_review_turn(book_state, {
                 "turn": turn_num,
                 "critique": critique_raw,
                 "issues": issues,
                 "overall_score": overall_score,
                 "verdict": verdict,
                 "corrections": corrections,
-            }
-            book_state.review_history.append(turn_record)
-            # Also keep the latest as `review` for backward compat
-            book_state.review = turn_record
-
-            save_book(book_state.id, book_state)
+            })
 
             # If book passes review, we're done
             if verdict == "ready" or not issues:
@@ -802,9 +792,7 @@ class Orchestrator:
                            book_state.title, turn_num, overall_score)
                 book_state.review["reviewed"] = True
                 _transition(book_state, "reviewed")
-                book_state.progress["current_step"] = "reviewed"
-                book_state.progress["percentage"] = 100
-                save_book(book_state.id, book_state)
+                _update_progress(book_state, "reviewed", 100)
                 return book_state.review_history
 
         # Max turns reached without passing - mark as reviewed anyway with note
@@ -813,9 +801,7 @@ class Orchestrator:
         book_state.review["max_turns_reached"] = True
         book_state.review["message"] = f"Review completed after {turns_limit} turns. Some issues may remain."
         _transition(book_state, "reviewed")
-        book_state.progress["current_step"] = "reviewed"
-        book_state.progress["percentage"] = 100
-        save_book(book_state.id, book_state)
+        _update_progress(book_state, "reviewed", 100)
 
         return book_state.review_history
 
