@@ -31,18 +31,7 @@ function esc(s) {
 
 /* ── Status Badge ──────────────────────────────────────────────── */
 function statusBadge(status) {
-  const textMap = {
-    pending: 'pending',
-    summary_generated: 'summary',
-    outline_generated: 'outline',
-    in_progress: 'in progress',
-    completed: 'completed',
-    reviewing: 'reviewing',
-    reviewed: 'reviewed',
-    failed: 'failed',
-  };
-  const label = textMap[status] || status.replace(/_/g, ' ');
-  return `<span class="status-label status-${status}">${label}</span>`;
+  return `<span class="${getStatusCssClass(status)}">${getStatusLabel(status)}</span>`;
 }
 
 /* ── Progress Polling ──────────────────────────────────────────── */
@@ -61,7 +50,7 @@ function startPolling(bookId, onDone) {
       const book = await apiFetch('/books/' + pollingBookId);
       // Double-check that this callback still belongs to the current polling session
       if (pollingBookId !== book.id) return;
-      const isDone = ['completed', 'reviewed', 'failed'].includes(book.status);
+      const isDone = isTerminalStatus(book.status);
       pollingCallback(book);
       if (isDone) {
         stopPolling();
@@ -70,7 +59,7 @@ function startPolling(bookId, onDone) {
     } catch (err) {
       console.error('poll error:', err);
     }
-  }, 3000);
+  }, SHARED_CONFIG?.ui?.polling_interval_ms ?? 3000);
 }
 
 function stopPolling() {
@@ -84,7 +73,7 @@ function stopPolling() {
 
 /* ── Library Auto-Refresh ───────────────────────────────────────── */
 let libraryPollingInterval = null;
-const LIBRARY_POLL_INTERVAL = 10000; // 10 seconds
+const LIBRARY_POLL_INTERVAL = () => SHARED_CONFIG?.ui?.library_polling_interval_ms ?? 10000;
 
 function startLibraryPolling(onUpdate) {
   stopLibraryPolling();
@@ -94,7 +83,7 @@ function startLibraryPolling(onUpdate) {
     } catch (err) {
       console.error('library poll error:', err);
     }
-  }, LIBRARY_POLL_INTERVAL);
+  }, LIBRARY_POLL_INTERVAL());
 }
 
 function stopLibraryPolling() {

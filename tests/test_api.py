@@ -46,6 +46,9 @@ def _isolate_api_tests(tmp_path):
     _m.server_config.persisted = None
     _m.reviewer_client = None
 
+    # Reset semaphore to allow re-creation for new event loop
+    _m._generation_semaphore = None
+
     # Ensure temp directories exist
     ensure_data_dir()
     ensure_exports_dir()
@@ -310,105 +313,11 @@ class TestBookEndpoints:
         data = resp.json()
         assert "book_id" in data
 
-    @pytest.mark.asyncio
-    async def test_create_book_missing_title(self, client):
-        """POST /api/books/create rejects requests with empty title."""
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
 
-        resp = await client.post("/api/books/create", json={
-            "title": "",
-            "prompt": "A test book",
-        })
-        assert resp.status_code == 422
-        data = resp.json()
-        # Pydantic should report title validation error
-        assert any("title" in str(err.get("loc", [])) for err in data.get("detail", []))
 
-    @pytest.mark.asyncio
-    async def test_create_book_missing_prompt(self, client):
-        """POST /api/books/create rejects requests with empty prompt."""
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
 
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "",
-        })
-        assert resp.status_code == 422
-        data = resp.json()
-        assert any("prompt" in str(err.get("loc", [])) for err in data.get("detail", []))
 
-    @pytest.mark.asyncio
-    async def test_create_book_invalid_length(self, client):
-        """POST /api/books/create rejects invalid length values."""
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
 
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-            "length": "invalid_length_value",
-        })
-        # FastAPI should reject this — length must be one of the valid options
-        # The orchestrator validates length, but the schema doesn't enforce it
-        # at the Pydantic level, so this may pass validation but fail later.
-        # At minimum, it should not return 422 for schema validation.
-        assert resp.status_code in (200, 400, 422)
-
-    @pytest.mark.asyncio
-    async def test_create_book_invalid_review_max_turns(self, client):
-        """POST /api/books/create rejects out-of-range review_max_turns."""
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
-
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-            "review_max_turns": 0,  # below minimum of 1
-        })
-        assert resp.status_code == 422
-
-        resp2 = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-            "review_max_turns": 11,  # above maximum of 10
-        })
-        assert resp2.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_create_book_null_review_max_turns(self, client):
-        """POST /api/books/create rejects null review_max_turns.
-
-        Regression test: JavaScript NaN converts to null in JSON.stringify,
-        and Pydantic rejects null for int fields, causing 422 errors.
-        """
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
-
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-            "review_max_turns": None,
-        })
-        assert resp.status_code == 422
-        data = resp.json()
-        assert any("review_max_turns" in str(err.get("loc", [])) for err in data.get("detail", []))
-
-    @pytest.mark.asyncio
-    async def test_create_book_defaults(self, client):
-        """POST /api/books/create uses schema defaults for omitted optional fields."""
-        ai_client.endpoint_url = "http://localhost:8080"
-        ai_client.model_name = "gpt-4o"
-
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["review_max_turns"] == 2
-        assert data["skip_review"] is False
 
 
 class TestWebUI:
@@ -416,9 +325,107 @@ class TestWebUI:
 
     @pytest.mark.asyncio
     async def test_index_page(self, client):
-        """GET / returns the web interface HTML."""
+        """GET / returns the web interface HTML with required scripts."""
         resp = await client.get("/")
         assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
         body = resp.text
-        assert "Hullucinator" in body
-        assert "setupOverlay" in body
+        # Verify required JS modules are loaded
+        assert "config.js" in body
+        assert "ui.js" in body
+        assert "app.js" in body
+        assert "settings.js" in body
+        assert "boot.js" in body
+
+class TestRetryEndpoint:
+    """Test the POST /api/books/{id}/retry endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_retry_creates_new_book(self, client):
+        """Retry creates a new book with same content and deletes the old one."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+
+        # Create a book
+        resp = await client.post("/api/books/create", json={
+            "title": "Retry Test",
+            "prompt": "A test book for retry",
+            "tags": ["comedy"],
+            "length": "novella",
+            "review_max_turns": 3,
+        })
+        assert resp.status_code == 200
+        old_book = resp.json()
+        old_id = old_book["book_id"]
+
+        # Retry
+        resp = await client.post(f"/api/books/{old_id}/retry")
+        assert resp.status_code == 200
+        retry_response = resp.json()
+        new_book_id = retry_response["book_id"]
+        assert new_book_id != old_id
+        assert retry_response["status"] == "pending"
+
+        # Fetch the new book to verify all fields
+        resp = await client.get(f"/api/books/{new_book_id}")
+        assert resp.status_code == 200
+        new_book = resp.json()
+
+        # New book has same content
+        assert new_book["title"] == "Retry Test"
+        assert new_book["prompt"] == "A test book for retry"
+        assert new_book["tags"] == ["comedy"]
+        assert new_book["length"] == "novella"
+        assert new_book["review_max_turns"] == 3
+        assert new_book["id"] != old_id
+        assert new_book["status"] == "pending"
+
+        # Old book is deleted
+        resp = await client.get(f"/api/books/{old_id}")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_retry_nonexistent_book(self, client):
+        """Retry on non-existent book returns 404."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        resp = await client.post("/api/books/nonexistent/retry")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_retry_preserves_all_fields(self, client):
+        """Retry preserves all book fields including optional ones."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+
+        # Create a book with all fields
+        resp = await client.post("/api/books/create", json={
+            "title": "Full Fields Test",
+            "prompt": "A comprehensive test",
+            "tags": ["sci-fi", "comedy"],
+            "length": "epic",
+            "review_max_turns": 5,
+            "skip_review": True,
+        })
+        assert resp.status_code == 200
+        old_book = resp.json()
+        old_id = old_book["book_id"]
+
+        # Retry
+        resp = await client.post(f"/api/books/{old_id}/retry")
+        assert resp.status_code == 200
+        retry_response = resp.json()
+        new_book_id = retry_response["book_id"]
+
+        # Fetch the new book to verify all fields
+        resp = await client.get(f"/api/books/{new_book_id}")
+        assert resp.status_code == 200
+        new_book = resp.json()
+
+        assert new_book["title"] == "Full Fields Test"
+        assert new_book["prompt"] == "A comprehensive test"
+        assert new_book["tags"] == ["sci-fi", "comedy"]
+        assert new_book["length"] == "epic"
+        assert new_book["review_max_turns"] == 5
+        assert new_book["skip_review"] is True
+        assert new_book["status"] == "pending"

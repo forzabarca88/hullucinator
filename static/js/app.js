@@ -47,7 +47,7 @@ function initCreateForm() {
     promptEl.addEventListener('input', () => {
       const len = promptEl.value.length;
       counterEl.textContent = len.toLocaleString() + ' characters';
-      counterEl.className = 'field-hint' + (len > 10000 ? ' prompt-warn' : '');
+      counterEl.className = 'field-hint' + (len > (SHARED_CONFIG?.ui?.prompt_warn_threshold ?? 10000) ? ' prompt-warn' : '');
     });
   }
 
@@ -117,8 +117,7 @@ async function loadBooks() {
     const list = $('booksList');
     if (!list) return;
 
-    const activeStatuses = new Set(['pending', 'summary_generated', 'outline_generated', 'in_progress', 'reviewing']);
-    const hasActive = books.some(b => activeStatuses.has(b.status));
+    const hasActive = books.some(b => isActiveStatus(b.status));
 
     if (!books.length) {
       list.innerHTML = '<div class="empty-state"><hr><p>Your shelves are empty. Submit your first manuscript above.</p></div>';
@@ -190,7 +189,8 @@ async function loadBooks() {
 
 function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
   let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${esc(t)}</span>`).join('');
-  let lengthBadge = b.length ? `<span class="status-label" style="color:var(--status-pending);background:rgba(91,123,138,0.08)">${esc(b.length)}</span>` : '';
+  let lengthLabel = b.length ? getStatusLabel(b.length) : '';
+  let lengthBadge = lengthLabel ? `<span class="status-label" style="color:var(--status-pending);background:rgba(91,123,138,0.08)">${esc(lengthLabel)}</span>` : '';
 
   return `<div class="book-card" data-id="${b.id}">
     <button class="book-delete-btn" data-delete-id="${b.id}" title="Delete book">Delete</button>
@@ -238,7 +238,7 @@ async function openDetail(bookId) {
     $('detailOverlay').classList.add('active');
 
     // Poll for progress if still in progress
-    if (['pending', 'summary_generated', 'outline_generated', 'in_progress', 'reviewing'].includes(book.status)) {
+    if (isActiveStatus(book.status)) {
       startPolling(bookId, async (updatedBook) => {
         // Update progress bar in modal
         const pBar = $('detailContent').querySelector('.progress-fill');
@@ -276,7 +276,7 @@ function renderDetail(book) {
     <h3>Settings</h3>
     <div class="detail-settings">
       <div class="detail-setting"><span class="detail-label">Prompt</span><div class="detail-value">${esc(book.prompt)}</div></div>
-      <div class="detail-setting"><span class="detail-label">Length</span><div class="detail-value">${esc(book.length || 'novel')}</div></div>
+      <div class="detail-setting"><span class="detail-label">Length</span><div class="detail-value">${esc(getStatusLabel(book.length || 'novel'))}</div></div>
       ${book.tags && book.tags.length ? `<div class="detail-setting"><span class="detail-label">Tags</span><div class="detail-value">${book.tags.map(t => `<span class="tag-badge">${esc(t)}</span>`).join(' ')}</div></div>` : ''}
       ${book.review_max_turns ? `<div class="detail-setting"><span class="detail-label">Max Review Turns</span><div class="detail-value">${book.review_max_turns}</div></div>` : ''}
     </div>
@@ -354,7 +354,9 @@ function buildReviewSection(review, history) {
 
   const score = review.overall_score ?? 0;
   const verdict = review.verdict || 'unknown';
-  const scoreClass = score >= 7 ? 'good' : score >= 4 ? 'ok' : 'bad';
+  const passScore = SHARED_CONFIG?.review?.pass_score ?? 7;
+  const failScore = SHARED_CONFIG?.review?.fail_score ?? 4;
+  const scoreClass = score >= passScore ? 'good' : score >= failScore ? 'ok' : 'bad';
   const passClass = verdict === 'ready' ? 'passed' : 'failed';
 
   html += `<div class="review-score ${scoreClass}">${score}/10</div>`;
@@ -388,7 +390,9 @@ function buildReviewSection(review, history) {
     for (const turn of history) {
       const tScore = turn.overall_score ?? '?';
       const tVerdict = turn.verdict || '?';
-      const tScoreClass = tScore >= 7 ? 'good' : tScore >= 4 ? 'ok' : 'bad';
+      const passScore = SHARED_CONFIG?.review?.pass_score ?? 7;
+      const failScore = SHARED_CONFIG?.review?.fail_score ?? 4;
+      const tScoreClass = tScore >= passScore ? 'good' : tScore >= failScore ? 'ok' : 'bad';
       const tPassClass = tVerdict === 'ready' ? 'passed' : 'failed';
       html += `<div style="background:var(--page);padding:0.5rem 0.7rem;border:1px solid var(--vellum);border-radius:0;margin-bottom:0.3rem;font-size:13px">
         <span style="font-family:var(--body-font);font-weight:600">Turn ${turn.turn}</span>: Score <span class="review-score ${tScoreClass}" style="font-size:14px;font-family:var(--display-font);font-weight:700;display:inline">${tScore}/10</span>
@@ -419,19 +423,7 @@ async function triggerReview(bookId) {
 async function retryBook(bookId) {
   if (!confirm('Restart generation for this book?')) return;
   try {
-    const book = await apiFetch('/books/' + bookId);
-    const res = await apiFetch('/books/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: book.title,
-        prompt: book.prompt,
-        tags: book.tags || [],
-        length: book.length || 'novel',
-        review_max_turns: book.review_max_turns || 2,
-      }),
-    });
-    // Delete the old failed book entry
-    await apiFetch('/books/' + bookId, { method: 'DELETE' });
+    const res = await apiFetch('/books/' + bookId + '/retry', { method: 'POST' });
     toast('New book queued!', 'success');
     closeModal();
     loadBooks();
@@ -456,6 +448,8 @@ async function deleteBook(bookId, title) {
 /* ── Init ──────────────────────────────────────────────────────── */
 function initApp() {
   initTags();
+  renderLengthSelect($('bookLength'));
+  renderMaxTurnsSelect($('bookMaxTurns'));
   initCreateForm();
   initModal();
   // loadBooks runs after config check in initSettings → checkConfig

@@ -17,7 +17,59 @@ from typing import List, Dict, Optional, Any
 
 import httpx
 
+from app.config import get_default_shared_config
+
 logger = logging.getLogger(__name__)
+
+# Shared config for retry/timeout defaults
+_client_config = get_default_shared_config().client
+
+
+def _parse_models_response(result: dict) -> list:
+    """Parse OpenAI-compatible /v1/models response into a list of model dicts."""
+    models = []
+    if "data" in result:
+        for item in result["data"]:
+            models.append({
+                "id": item.get("id", item.get("name", "")),
+                "name": item.get("id", item.get("name", "")),
+            })
+    elif isinstance(result, list):
+        for item in result:
+            models.append({
+                "id": item.get("id", item.get("name", "")),
+                "name": item.get("id", item.get("name", "")),
+            })
+    elif "error" in result:
+        logger.warning("Model listing returned error response: %s", result.get("error"))
+    else:
+        models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+    return models
+
+
+def _build_api_url(endpoint: str, path_suffix: str) -> str:
+    """Build the full API URL, handling /v1 suffix correctly.
+
+    If endpoint already ends with /v1, append path_suffix directly.
+    Otherwise, prepend /v1/ before path_suffix.
+    """
+    base = endpoint.rstrip('/')
+    if base.endswith('/v1'):
+        return f"{base}/{path_suffix}"
+    return f"{base}/v1/{path_suffix}"
+
+
+def _extract_content(result: Dict[str, Any]) -> str:
+    """Extract text content from an LLM response, handling both string and list formats.
+
+    Some providers (e.g. Mistral) return content as a list of text blocks:
+    [{"type": "text", "text": "..."}, ...]
+    """
+    raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if isinstance(raw, list):
+        parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
+        return "\n".join(parts).strip()
+    return str(raw).strip()
 
 
 class AIClient:
@@ -29,8 +81,8 @@ class AIClient:
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
         # Single persistent async client reused across all requests
-        # (L1) Configurable timeout via AI_TIMEOUT env var (default: 1800s = 30min)
-        timeout_secs = float(os.environ.get("AI_TIMEOUT", "1800"))
+        # (L1) Configurable timeout via AI_TIMEOUT env var (override) or shared config
+        timeout_secs = float(os.environ.get("AI_TIMEOUT", str(_client_config.http_timeout)))
         self._client = httpx.AsyncClient(timeout=timeout_secs)
 
     # ── Mutable configuration properties ──────────────────────────────
@@ -90,34 +142,13 @@ class AIClient:
         Fetch the list of available models from the LLM API.
         Uses the OpenAI-compatible /v1/models endpoint.
         """
-        # Handle /v1 suffix: if endpoint already ends in /v1, don't double-append
-        url = f"{self._endpoint_url}/models" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/models"
+        url = _build_api_url(self._endpoint_url, "models")
         try:
             response = await self._client.get(url, headers=self._headers)
             response.raise_for_status()
             result = response.json()
 
-            # Handle both OpenAI-style and generic responses
-            models = []
-            if "data" in result:
-                for item in result["data"]:
-                    models.append({
-                        "id": item.get("id", item.get("name", "")),
-                        "name": item.get("id", item.get("name", "")),
-                    })
-            elif isinstance(result, list):
-                for item in result:
-                    models.append({
-                        "id": item.get("id", item.get("name", "")),
-                        "name": item.get("id", item.get("name", "")),
-                    })
-            elif "error" in result:
-                # Provider returned an error JSON on 200 OK — treat as empty
-                logger.warning("Model listing returned error response: %s", result.get("error"))
-                return []
-            else:
-                # Try to extract model info from a dict response
-                models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+            models = _parse_models_response(result)
 
             logger.info("Fetched %d models from %s", len(models), self._endpoint_url)
             return models
@@ -129,24 +160,11 @@ class AIClient:
             logger.warning("Model listing failed: %s", e)
             return []
 
-    @staticmethod
-    def _extract_content(result: Dict[str, Any]) -> str:
-        """Extract text content from an LLM response, handling both string and list formats.
-        
-        Some providers (e.g. Mistral) return content as a list of text blocks:
-        [{"type": "text", "text": "..."}, ...]
-        """
-        raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if isinstance(raw, list):
-            parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
-            return "\n".join(parts).strip()
-        return str(raw).strip()
-
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
-        max_retries: int = 2,
+        max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -162,7 +180,7 @@ class AIClient:
             model_override: Optional model name to use instead of self._model_name
         """
         # Handle /v1 suffix
-        url = f"{self._endpoint_url}/chat/completions" if self._endpoint_url.endswith('/v1') else f"{self._endpoint_url}/v1/chat/completions"
+        url = _build_api_url(self._endpoint_url, "chat/completions")
         payload = {
             "model": model_override or self._model_name,
             "messages": messages,
@@ -177,11 +195,11 @@ class AIClient:
                 result = response.json()
 
                 # Check if content is empty and retry
-                content = self._extract_content(result)
+                content = _extract_content(result)
                 if not content and attempt < max_retries:
                     # (L2) Jitter: randomize wait time to prevent thunder-herd retries
-                    base_wait = 10 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.empty_response_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[AIClient] Empty response, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
@@ -194,8 +212,8 @@ class AIClient:
                 )
                 if e.response.status_code in (429, 500, 503) and attempt < max_retries:
                     # (L2) Jitter for status code retries
-                    base_wait = 15 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.retry_status_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[AIClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
                     await asyncio.sleep(wait)
                     continue
@@ -205,8 +223,8 @@ class AIClient:
                 last_error = Exception(f"An error occurred: {str(e)}")
                 if attempt < max_retries:
                     # (L2) Jitter for general error retries
-                    base_wait = 10 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.retry_base_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[AIClient] Error, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
@@ -316,31 +334,13 @@ class ReviewerClient:
         Fetch the list of available models from the reviewer's LLM API.
         Uses the reviewer's endpoint URL and API key with the shared HTTP connection.
         """
-        # Handle /v1 suffix (use effective endpoint via property)
-        url = f"{self.endpoint_url}/models" if self.endpoint_url.endswith('/v1') else f"{self.endpoint_url}/v1/models"
+        url = _build_api_url(self.endpoint_url, "models")
         try:
             response = await self._main._client.get(url, headers=self._headers)
             response.raise_for_status()
             result = response.json()
 
-            models = []
-            if "data" in result:
-                for item in result["data"]:
-                    models.append({
-                        "id": item.get("id", item.get("name", "")),
-                        "name": item.get("id", item.get("name", "")),
-                    })
-            elif isinstance(result, list):
-                for item in result:
-                    models.append({
-                        "id": item.get("id", item.get("name", "")),
-                        "name": item.get("id", item.get("name", "")),
-                    })
-            elif "error" in result:
-                logger.warning("Reviewer model listing returned error response: %s", result.get("error"))
-                return []
-            else:
-                models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+            models = _parse_models_response(result)
 
             logger.info("Fetched %d reviewer models from %s", len(models), self.endpoint_url)
             return models
@@ -356,7 +356,7 @@ class ReviewerClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
-        max_retries: int = 2,
+        max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -367,7 +367,7 @@ class ReviewerClient:
         (F2 fix: use effective endpoint/model via property getters for fallback)
         """
         # Handle /v1 suffix (use effective endpoint via property)
-        url = f"{self.endpoint_url}/chat/completions" if self.endpoint_url.endswith('/v1') else f"{self.endpoint_url}/v1/chat/completions"
+        url = _build_api_url(self.endpoint_url, "chat/completions")
         payload = {
             "model": model_override or self.model_name,
             "messages": messages,
@@ -381,11 +381,11 @@ class ReviewerClient:
                 response.raise_for_status()
                 result = response.json()
 
-                content = AIClient._extract_content(result)
+                content = _extract_content(result)
                 if not content and attempt < max_retries:
                     # (L2) Jitter for empty response retries
-                    base_wait = 10 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.empty_response_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[ReviewerClient] Empty response, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue
@@ -398,8 +398,8 @@ class ReviewerClient:
                 )
                 if e.response.status_code in (429, 500, 503) and attempt < max_retries:
                     # (L2) Jitter for status code retries
-                    base_wait = 15 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.retry_status_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[ReviewerClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
                     await asyncio.sleep(wait)
                     continue
@@ -409,8 +409,8 @@ class ReviewerClient:
                 last_error = Exception(f"Reviewer error: {str(e)}")
                 if attempt < max_retries:
                     # (L2) Jitter for general error retries
-                    base_wait = 10 * (attempt + 1)
-                    wait = base_wait * (0.5 + random.random())
+                    base_wait = _client_config.retry_base_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
                     logger.warning("[ReviewerClient] Error, retrying in %.1fs...", wait)
                     await asyncio.sleep(wait)
                     continue

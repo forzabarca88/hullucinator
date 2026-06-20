@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 # Ensure the project root is on sys.path so `app` module is importable
+# from conftest fixtures (pytest auto-discovers root for test files,
+# but conftest needs explicit setup for external runners).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -35,17 +37,17 @@ def _reset_config():
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()
     server_config.configured = False
-    server_config._persisted = None
+    server_config.persisted = None
 
     yield
 
     # Restore config if it was saved
     if saved_config:
         CONFIG_FILE.write_text(saved_config)
-        server_config._persisted = True
+        server_config.persisted = True
     elif CONFIG_FILE.exists():
         # If config was recreated during test, mark as persisted
-        server_config._persisted = True
+        server_config.persisted = True
 
     # Restore storage paths to real defaults after test
     reset_to_defaults()

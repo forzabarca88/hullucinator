@@ -79,13 +79,7 @@
         <h3><span class="step-number">4</span> Review Settings</h3>
         <div class="field">
           <label for="setupMaxTurns">Max Review Turns</label>
-          <select id="setupMaxTurns">
-            <option value="1">1 turn — quick review</option>
-            <option value="2" selected>2 turns — balanced</option>
-            <option value="3">3 turns — thorough</option>
-            <option value="4">4 turns — very thorough</option>
-            <option value="5">5 turns — exhaustive</option>
-          </select>
+          <select id="setupMaxTurns"></select>
           <span class="field-hint">Number of critique → correct cycles per book.</span>
         </div>
         <div class="field">
@@ -141,21 +135,11 @@
       <div class="form-row">
         <div class="form-col">
           <label for="bookLength">Book Length</label>
-          <select id="bookLength">
-            <option value="short_story">Short Story (1 chapter, 1K–7.5K words)</option>
-            <option value="novella">Novella (3–5 chapters, 7.5K–20K words)</option>
-            <option value="novel" selected>Novel (8–15 chapters, 20K–50K words)</option>
-            <option value="epic">Epic (15–25 chapters, 50K+ words)</option>
-          </select>
+          <select id="bookLength"></select>
         </div>
         <div class="form-col">
           <label for="maxTurns">Max Review Turns</label>
-          <select id="maxTurns">
-            <option value="1">1 turn (quick)</option>
-            <option value="2" selected>2 turns (default)</option>
-            <option value="3">3 turns (thorough)</option>
-            <option value="4">4 turns (very thorough)</option>
-            <option value="5">5 turns (exhaustive)</option>
+          <select id="maxTurns"></select>
           </select>
         </div>
       </div>
@@ -257,13 +241,7 @@
     <h3>Review</h3>
     <div class="field">
       <label for="cfgMaxTurns">Max Review Turns</label>
-      <select id="cfgMaxTurns">
-        <option value="1">1 turn</option>
-        <option value="2" selected>2 turns</option>
-        <option value="3">3 turns</option>
-        <option value="4">4 turns</option>
-        <option value="5">5 turns</option>
-      </select>
+      <select id="cfgMaxTurns"></select>
       <span class="field-hint">Per-book setting overrides this default.</span>
     </div>
     <div class="field">
@@ -282,6 +260,7 @@
 </div>
 
 <!-- ── Scripts (order matters) ─────────────────────────────────── -->
+<script src="/static/js/config.js"></script>
 <script src="/static/js/ui.js"></script>
 <script src="/static/js/app.js"></script>
 <script src="/static/js/settings.js"></script>
