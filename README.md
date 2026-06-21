@@ -32,7 +32,22 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 hullucinator
 ```
 
-Open http://localhost:8000 in your browser to use the web interface.
+Open http://localhost:8000 in your browser to use the web interface. On first launch, the setup wizard guides you through configuring your AI provider.
+
+## Testing
+
+```bash
+# Run the full test suite (uses .venv virtual environment)
+.venv/bin/pytest -x -q
+
+# Run specific test file
+.venv/bin/pytest tests/test_api.py -v
+
+# Run with coverage
+.venv/bin/pytest --cov=app --cov=tests -x -q
+```
+
+The test suite includes 126 tests across 9 test files covering backend logic, API endpoints, parsing, schemas, config, concurrency, export, storage, and frontend integrity.
 
 ## Web Interface
 
@@ -59,6 +74,7 @@ The built-in web interface provides:
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
 | `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model/key, max review turns, review thresholds). Persisted to `~/.hullucinator_data/data/config.json` (no API keys). |
+| `GET` | `/api/config-schema` | Get shared configuration schema for frontend (length options, status labels, review defaults, UI schema) |
 | `GET` | `/api/models` | List available models from writer's LLM provider |
 | `GET` | `/api/reviewer/models` | List available models from reviewer's LLM provider |
 | `POST` | `/api/books/create` | Create a new book (background generation) |
@@ -66,6 +82,7 @@ The built-in web interface provides:
 | `GET` | `/api/books/{book_id}` | Get book status and content |
 | `GET` | `/api/books/{book_id}/validate` | Validate book completeness |
 | `POST` | `/api/books/{book_id}/review` | Trigger professional review |
+| `POST` | `/api/books/{book_id}/retry` | Retry failed book (creates new book, deletes old) |
 | `DELETE` | `/api/books/{book_id}` | Delete a book (cancels active task if generating) |
 | `GET` | `/api/books/{book_id}/export/{format}` | Download as `epub` or `pdf` |
 
@@ -168,25 +185,47 @@ Deletes the book permanently. If the book is actively being generated, the backg
 
 ## Book Generation Pipeline
 
-The orchestrator runs these steps sequentially, incorporating genre tags and length throughout:
+The orchestrator coordinates these steps sequentially, delegating to specialized modules:
 
-1. **Summary** — LLM generates a detailed book summary from the prompt, guided by genre tags and length
-2. **Outline** — LLM produces chapter titles from the summary, with chapter count determined by book length
-3. **Chapters** — Each chapter is generated one at a time with **cumulative context** from prior chapters:
+1. **Summary** (`app/generation.py`) — LLM generates a detailed book summary from the prompt, guided by genre tags and length
+2. **Outline** (`app/generation.py`) — LLM produces chapter titles from the summary, with chapter count determined by book length
+3. **Chapters** (`app/generation.py`) — Each chapter is generated one at a time with **cumulative context** from prior chapters:
    - Book summary (overall direction)
    - Full outline (structural awareness)
    - Condensed summaries of all previously generated chapters (narrative continuity)
-4. **Review** — Professional critic reviews the complete book using an **iterative correction loop**:
+4. **Review** (`app/review.py`) — Professional critic reviews the complete book using an **iterative correction loop**:
    - Critic evaluates the full book and identifies issues (plot holes, inconsistencies, pacing, continuity)
    - Affected chapters are re-revisioned with full context
    - Critic re-evaluates the corrected book
    - Loop continues until the book passes review (score ≥ 7) or max turns is reached
    - Full per-turn audit trail stored in `review_history`
    - Uses a separate reviewer LLM if configured (`REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME`)
+   - **Chunked review** for long books (>30,000 words or >10 chapters): reviews in batches to avoid context overflow
 
-Status transitions: `pending` → `summary_generated` → `outline_generated` → `in_progress` → `completed` → `reviewing` → `reviewed` (or `failed` at any step)
+Status transitions (`app/status.py`): `pending` → `summary_generated` → `outline_generated` → `in_progress` → `completed` → `reviewing` → `reviewed` (or `failed` at any step)
 
 Generation runs as a **background task** — the API returns immediately and you can poll `/api/books/{book_id}` for progress. The review step runs automatically after chapter generation completes, or can be triggered manually via `POST /api/books/{book_id}/review`.
+
+### Architecture
+
+The codebase is organized into focused modules:
+
+| Module | Responsibility |
+|--------|---------------|
+| `app/config.py` | Shared configuration — single source of truth |
+| `app/schemas.py` | Pydantic data models |
+| `app/storage.py` | JSON file persistence |
+| `app/ai_client.py` | LLM API client with shared retry logic |
+| `app/status.py` | Status transition management |
+| `app/parsing.py` | LLM response parsing |
+| `app/generation.py` | Book generation pipeline |
+| `app/review.py` | Review pipeline (full + chunked) |
+| `app/validators.py` | Input validation |
+| `app/orchestrator.py` | Slim coordinator (~150 lines) |
+| `app/middleware.py` | CORS, security headers |
+| `app/routes.py` | All API endpoints |
+| `app/main.py` | Application bootstrap |
+| `app/exporter.py` | EPUB & PDF export |
 
 ## Configuration
 
@@ -216,19 +255,30 @@ You can also configure the AI provider directly from the web interface using the
 hullucinator/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py          # FastAPI app, endpoints, background tasks, web UI
-│   ├── schemas.py       # Pydantic data models (BookState, BookCreateRequest)
-│   ├── storage.py       # JSON file persistence (absolute paths)
-│   ├── ai_client.py     # HTTP client for LLM API (async, persistent, reconfigurable). Includes ReviewerClient for separate review endpoint/model.
-│   ├── orchestrator.py  # Generation pipeline with chapter continuity + iterative review loop
+│   ├── config.py        # Shared configuration — single source of truth (Pydantic sub-models)
+│   ├── schemas.py       # Pydantic data models (BookState, BookCreateRequest, AIConfig, etc.)
+│   ├── storage.py       # JSON file persistence + config persistence
+│   ├── ai_client.py     # LLM API client (async, persistent connection, shared retry logic). Includes ReviewerClient.
+│   ├── status.py        # Status transition management (VALID_TRANSITIONS, _transition)
+│   ├── parsing.py       # LLM response parsing (outline, critique, chapter title matching)
+│   ├── generation.py    # Book generation pipeline (summary, outline, chapters with continuity)
+│   ├── review.py        # Review pipeline (full/chunked review, iterative correction loop)
+│   ├── validators.py    # Validation helpers (create request, book state, AI config)
+│   ├── orchestrator.py  # Slim pipeline coordinator (~150 lines, delegates to specialized modules)
+│   ├── middleware.py    # CORS, security headers, no-cache middleware
+│   ├── routes.py        # All /api/ endpoint definitions (config, models, books, export)
+│   ├── main.py          # Application bootstrap (FastAPI init, middleware, router, static files)
 │   └── exporter.py      # EPUB & PDF export (configurable fonts, review metadata)
 ├── static/
 │   ├── css/
 │   │   └── styles.css   # All styles (variables, components, responsive)
 │   ├── js/
+│   │   ├── config.js    # Shared config loader and renderer helpers
 │   │   ├── ui.js        # Shared utilities (apiFetch, toast, polling, escaping)
-│   │   ├── app.js       # Main app (create form, library, detail modal, review section)
-│   │   └── settings.js  # Settings panel (writer/reviewer config, model fetch)
+│   │   ├── renderers.js # UI rendering (status badge, book cards, detail modal, review section)
+│   │   ├── app.js       # Main app logic (create form, library, detail modal, actions)
+│   │   ├── settings.js  # Settings panel (writer/reviewer config, model fetch, persistence)
+│   │   └── boot.js      # Bootstrapper (loads shared config, initializes app and settings)
 │   └── index.html       # Clean HTML skeleton (links CSS/JS, defines DOM structure)
 ├── ~/.hullucinator_data/   # User data directory (cross-platform)
 │   ├── data/

@@ -12,7 +12,7 @@ from app.storage import save_book, load_config
 from app.schemas import BookState
 from app.status import _transition
 from app.parsing import parse_critique, match_chapter_title
-from app.generation import _update_progress
+from app.generation import _update_progress, _summarize_chapter
 from app.config import get_default_shared_config
 
 logger = logging.getLogger(__name__)
@@ -466,23 +466,3 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
     save_book(book.id, book)
 
 
-async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_title: str) -> str:
-    """
-    Generate a concise one-paragraph summary of a chapter.
-    Used to provide continuity context for subsequent chapters.
-    """
-    messages = [
-        {"role": "system", "content": (
-            "You are a literary analyst. Summarize the following chapter in a single, concise paragraph "
-            "(2-4 sentences) capturing the key events, character developments, and any plot threads "
-            "that carry forward to the next chapter."
-        )},
-        {"role": "user", "content": (
-            f"Chapter: {chapter_title}\n\n"
-            f"Content:\n{chapter_content}\n\n"
-            f"Provide only the summary paragraph, nothing else."
-        )},
-    ]
-
-    response = await ai_client.generate_completion(messages, temperature=0.3)
-    return _extract_content(response)

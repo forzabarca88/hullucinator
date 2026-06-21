@@ -330,9 +330,10 @@ class TestWebUI:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
         body = resp.text
-        # Verify required JS modules are loaded
+        # Verify required JS modules are loaded (in correct order)
         assert "config.js" in body
         assert "ui.js" in body
+        assert "renderers.js" in body
         assert "app.js" in body
         assert "settings.js" in body
         assert "boot.js" in body
