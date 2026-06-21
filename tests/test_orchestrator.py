@@ -68,9 +68,10 @@ Chapter 3: The Climax - The final confrontation
 I hope this helps!"""
         result = orch._parse_outline(raw)
         assert len(result) == 3
-        assert "Chapter 1: The Setup" in result[0]
-        assert "Chapter 2: The Conflict" in result[1]
-        assert "Chapter 3: The Climax" in result[2]
+        # parse_outline strips the "Chapter N:" prefix, keeping the title
+        assert result[0] == "The Setup - Introduce the main character and setting"
+        assert result[1] == "The Conflict - The hero faces their first challenge"
+        assert result[2] == "The Climax - The final confrontation"
 
 
 class TestParseCritique:

@@ -21,7 +21,7 @@ def validate_create_request(req: BookCreateRequest) -> List[str]:
 
     if not req.title or not req.title.strip():
         errors.append("Title is required and cannot be empty.")
-    elif len(req.title) > _config.ui.max_title_length:
+    elif len(req.title) > _config.ui.title_max_length:
         errors.append(f"Title must be {max_title_length} characters or fewer.")
 
     if not req.prompt or not req.prompt.strip():
@@ -113,4 +113,4 @@ def validate_ai_config(cfg: AIConfig) -> List[str]:
 
 
 # Re-export max_title_length for frontend use
-max_title_length = _config.ui.max_title_length
+max_title_length = _config.ui.title_max_length

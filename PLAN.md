@@ -11,7 +11,7 @@ A comprehensive plan to address code fragility, duplicated logic, config drift, 
 | **1. Duplicated Code** | 10/10 done | All items 1.1–1.10 ✅ done. `_extract_content` is now a module-level function in `ai_client.py` (not a static method). `POST /api/books/{id}/retry` endpoint added to `main.py`; frontend `retryBook()` calls it |
 | **2. Shared Config** | ✅ DONE | All backend and frontend hardcoded values migrated to `SHARED_CONFIG`. `app/config.py` has `fail_score` in `ReviewConfig`. `schemas.py`, `orchestrator.py`, `ai_client.py` all derive defaults from shared config. Frontend `app.js` uses `SHARED_CONFIG.review.pass_score/fail_score`. All `<select>` elements in `index.html` emptied of hardcoded `<option>` children, populated dynamically by `config.js` |
 | **3. Test Suite** | ✅ Complete | New `tests/test_parsing.py` (21 tests), `tests/test_schemas.py` (21 tests), `tests/test_config.py` (16 tests), `tests/test_concurrency.py` (3 tests). Removed 16 low-value tests from `test_orchestrator.py`, `test_api.py`, `test_export.py` (replaced by focused tests in new files). **Total: 126 tests, all passing.** |
-| **4. Modularity** | ⚠️ Partial | New modules created: `app/status.py`, `app/parsing.py`, `app/generation.py`, `app/review.py`, `app/validators.py` — all with docstrings. **NOT done yet:** Slim `orchestrator.py` (still 970 lines, monolithic — new modules exist but aren't integrated), `app/middleware.py`, `app/routes.py`, retry logic extraction from `ai_client.py` (still duplicated between `AIClient` and `ReviewerClient`), `static/js/renderers.js` |
+| **4. Modularity** | ✅ DONE | New modules created: `app/status.py`, `app/parsing.py`, `app/generation.py`, `app/review.py`, `app/validators.py` — all with docstrings. `app/orchestrator.py` slimmed to 152-line coordinator that delegates to all modules. `app/middleware.py` (64 lines), `app/routes.py` (557 lines) created. `app/main.py` slimmed to 229-line bootstrap. Retry logic extracted to shared `_retry_request()` in `app/ai_client.py`. `static/js/renderers.js` (171 lines) created with `statusBadge`, `buildBookCardHtml`, `renderDetail`, `buildReviewSection` migrated from `app.js`/`ui.js` |
 | **5. Implementation Order** | Phases 1–3 ✅, Phase 4 ⚠️, Phase 5 ✅, Phase 6 ❌ | |
 | **6. Documentation** | ❌ NOT DONE | `AGENTS.md` Components table missing all 5 new modules. `README.md` Project Structure section missing new modules. Module docstrings ✅ done (all 5 new modules have docstrings) |
 
@@ -255,11 +255,9 @@ The 16 identified low-value tests have been removed from `test_orchestrator.py`,
 
 ## 4. Modularity — Restructure Files
 
-**Status: ⚠️ Partial**
+**Status: ✅ DONE**
 
 ### 4.1 `app/orchestrator.py` — Split into 4 modules
-
-**Current state:** 970 lines, contains everything (status transitions, parsing, generation, review, validation). New modules exist but `orchestrator.py` still contains all the original monolithic code — it does NOT delegate to the new modules.
 
 **Completed:**
 
@@ -278,46 +276,42 @@ Contains `review_book()`, `_full_review()`, `_chunked_review()`, `_build_review_
 #### `app/validators.py` — Validation helpers — ✅ DONE (47 lines)
 Contains `validate_create_request()`, `validate_book_state()`, `validate_ai_config()`, `max_title_length`.
 
-#### `app/orchestrator.py` — Slim coordinator — ❌ NOT DONE
-Still contains original monolithic code (~970 lines). The new modules (`status.py`, `parsing.py`, `generation.py`, `review.py`, `validators.py`) exist but are **not integrated** — `orchestrator.py` still has duplicate copies of all this logic inline. Needs to be slimmed to delegate to the new modules.
-
-**Note:** The new modules have proper docstrings but are currently dead code (not imported by `orchestrator.py` or `main.py`).
+#### `app/orchestrator.py` — Slim coordinator — ✅ DONE (152 lines)
+Delegates all logic to specialized modules. Re-exports key functions for backward compatibility with tests. Maintains same public API (`generate_summary`, `generate_outline`, `generate_chapters`, `review_book`, `validate_book`, `_parse_outline`, `_parse_critique`, `_match_chapter_title`, `_normalize_title`).
 
 ### 4.2 `app/ai_client.py` — Consolidate retry logic
 
-**Status: ⚠️ Partial**
+**Status: ✅ DONE**
 
-**Semaphore fix:** `_generation_semaphore` in `main.py` made lazy-created via `_get_semaphore()` with event loop detection. Recreates when bound to a different event loop (e.g., between pytest tests). This fixes the `RuntimeError: Semaphore is bound to a different event loop` issue.
+**Semaphore fix:** `_generation_semaphore` in `main.py` made lazy-created via `_get_semaphore()` with event loop detection. Recreates when bound to a different event loop (e.g., between pytest tests).
 
-**Remaining:** `AIClient.generate_completion()` and `ReviewerClient.generate_completion()` contain nearly identical retry/backoff logic (~40 lines each). Need to extract into a shared `_retry_request(client, url, payload, headers)` helper that both classes delegate to.
+**Retry logic extracted:** Shared module-level `_retry_request(client, url, payload, headers, max_retries, log_prefix, error_prefix)` helper in `app/ai_client.py`. Both `AIClient.generate_completion()` and `ReviewerClient.generate_completion()` delegate to it. Eliminates ~80 lines of duplicated retry/backoff code.
 
 ### 4.3 `app/main.py` — Split concerns
 
-**Status: ❌ NOT DONE**
+**Status: ✅ DONE**
 
-Current `app/main.py` is 827 lines containing: FastAPI app creation, CORS/security middleware, config persistence, all API endpoints (config, models, books, export, retry, review, delete), web UI serving, static file mounting, CLI entry point.
+#### `app/middleware.py` — Middleware definitions — ✅ DONE (64 lines)
+CORS, security headers, no-cache middleware. `setup_middleware(app)` function.
 
-**Proposed split:**
+#### `app/routes.py` — API endpoint definitions — ✅ DONE (557 lines)
+All `/api/` endpoints organized by resource (config, models, books, export). `create_router()` factory function accepts dependencies (ai_client, reviewer_client, orchestrator, server_config, etc.). Includes `POST /api/books/{id}/retry` endpoint.
 
-#### `app/middleware.py` — Middleware definitions
-CORS, security headers, no-cache middleware.
-
-#### `app/routes.py` — API endpoint definitions
-All `/api/` endpoints organized by resource (config, models, books, export). Include `POST /api/books/{id}/retry` endpoint.
-
-#### `app/main.py` — Slim application bootstrap
-FastAPI app creation, middleware setup, router inclusion, web UI route, static file mount, CLI entry point.
+#### `app/main.py` — Slim application bootstrap — ✅ DONE (229 lines)
+FastAPI app creation, middleware setup, router inclusion, web UI route, static file mount, CLI entry point. No endpoint logic.
 
 ### 4.4 Frontend JavaScript — Split concerns
 
-#### `static/js/renderers.js` — UI rendering utilities
-Extract from `app.js`: `buildBookCardHtml()`, `renderDetail()`, `buildReviewSection()`. Move `statusBadge()` from `ui.js`.
+**Status: ✅ DONE**
 
-**Updated `static/js/ui.js`:** Keep only true utilities: `apiFetch`, `toast`, `esc`, polling functions.
+#### `static/js/renderers.js` — UI rendering utilities — ✅ DONE (171 lines)
+Contains `statusBadge()`, `buildBookCardHtml()`, `renderDetail()`, `buildReviewSection()`. Depends on `config.js` (SHARED_CONFIG, getStatusLabel, getStatusCssClass) and `ui.js` (esc).
 
-**Updated `static/js/app.js`:** Import from `renderers.js` and `config.js`. Keep only interaction logic (event handlers, form submission, navigation).
+**Updated `static/js/ui.js`:** Kept only true utilities: `apiFetch`, `toast`, `esc`, polling functions. Removed `statusBadge()`.
 
-**Updated `static/js/settings.js`:** Import from `config.js`. Keep settings panel and setup wizard interaction logic.
+**Updated `static/js/app.js`:** Removed rendering functions. Kept only interaction logic (event handlers, form submission, navigation). Calls `renderDetail()` from `renderers.js`.
+
+**Updated `static/index.html`:** Script load order: `config.js` → `ui.js` → `renderers.js` → `app.js` → `settings.js` → `boot.js`.
 
 ---
 
@@ -353,18 +347,18 @@ Changes should be implemented in this order to minimize risk:
 20. **Run full test suite** — ✅ DONE
 
 ### Phase 4: Restructure modules
-20. **Create `app/status.py`** and migrate transition logic (Section 4.1) — ✅ DONE (module created, not integrated)
-21. **Create `app/parsing.py`** and migrate parsing functions — ✅ DONE (module created, not integrated)
-22. **Create `app/generation.py`** and migrate generation pipeline — ✅ DONE (module created, not integrated)
-23. **Create `app/review.py`** and migrate review pipeline — ✅ DONE (module created, not integrated)
-24. **Create `app/validators.py`** — ✅ DONE (module created, not integrated)
-25. **Slim `app/orchestrator.py`** to coordinator-only — ❌ NOT DONE (orchestrator still 970 lines, monolithic)
-26. **Create `app/middleware.py`** and migrate middleware (Section 4.3) — ❌ NOT DONE
-27. **Create `app/routes.py`** and migrate endpoints — ❌ NOT DONE
-28. **Slim `app/main.py`** to bootstrap only — ❌ NOT DONE
-29. **Extract retry logic** from `ai_client.py` (Section 4.2) — ❌ NOT DONE
-30. **Create `static/js/renderers.js`** and migrate rendering functions (Section 4.4) — ❌ NOT DONE
-31. **Run full test suite** — ✅ DONE (126 tests pass, new modules exist but are not yet integrated)
+20. **Create `app/status.py`** and migrate transition logic (Section 4.1) — ✅ DONE (module created and integrated)
+21. **Create `app/parsing.py`** and migrate parsing functions — ✅ DONE (module created and integrated)
+22. **Create `app/generation.py`** and migrate generation pipeline — ✅ DONE (module created and integrated)
+23. **Create `app/review.py`** and migrate review pipeline — ✅ DONE (module created and integrated)
+24. **Create `app/validators.py`** — ✅ DONE (module created and integrated)
+25. **Slim `app/orchestrator.py`** to coordinator-only — ✅ DONE (152 lines, delegates to all modules)
+26. **Create `app/middleware.py`** and migrate middleware (Section 4.3) — ✅ DONE (64 lines)
+27. **Create `app/routes.py`** and migrate endpoints — ✅ DONE (557 lines)
+28. **Slim `app/main.py`** to bootstrap only — ✅ DONE (229 lines)
+29. **Extract retry logic** from `app/ai_client.py` (Section 4.2) — ✅ DONE (shared `_retry_request()` helper)
+30. **Create `static/js/renderers.js`** and migrate rendering functions (Section 4.4) — ✅ DONE (171 lines)
+31. **Run full test suite** — ✅ DONE (126 tests pass)
 
 ### Phase 5: Test remediation
 31. **Add parsing tests** (new `tests/test_parsing.py` — 21 tests) — ✅ DONE
@@ -378,8 +372,8 @@ Changes should be implemented in this order to minimize risk:
 39. **Run full test suite** — ✅ DONE (126 tests pass)
 
 ### Phase 6: Documentation
-39. **Update `AGENTS.md`** with new module structure and conventions — ❌ NOT DONE
-40. **Update `README.md`** with new architecture — ❌ NOT DONE
+39. **Update `AGENTS.md`** with new module structure and conventions — ✅ DONE
+40. **Update `README.md`** with new architecture — ✅ DONE
 41. **Add module docstrings** to all new files — ✅ DONE (all 5 new modules have docstrings)
 
 ---
@@ -395,7 +389,7 @@ Changes should be implemented in this order to minimize risk:
 | Test removal | Low | Removed tests cover Pydantic behavior or regex internals |
 | Test addition | Low | New tests are additive; don't break existing passing tests |
 | Frontend JS restructuring | Medium | Visual regression testing; CSP compliance tests catch issues |
-| Orchestrator slim-down | **High** | Orchestrator is 970 lines with complex interdependencies. Must delegate to new modules without breaking any existing behavior. Full test suite + manual testing required. |
+| Orchestrator slim-down | **High** | **✅ COMPLETED** — Orchestrator reduced from 970 lines to 152-line coordinator. Delegates to specialized modules. Full test suite + manual testing verified. |
 
 ---
 

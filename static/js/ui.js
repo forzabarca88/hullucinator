@@ -29,11 +29,6 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/* ── Status Badge ──────────────────────────────────────────────── */
-function statusBadge(status) {
-  return `<span class="${getStatusCssClass(status)}">${getStatusLabel(status)}</span>`;
-}
-
 /* ── Progress Polling ──────────────────────────────────────────── */
 let pollingInterval = null;
 let pollingBookId = null;

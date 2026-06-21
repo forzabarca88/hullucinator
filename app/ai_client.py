@@ -72,6 +72,64 @@ def _extract_content(result: Dict[str, Any]) -> str:
     return str(raw).strip()
 
 
+async def _retry_request(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    headers: dict,
+    max_retries: int,
+    log_prefix: str,
+    error_prefix: str,
+) -> Dict[str, Any]:
+    """
+    Send a POST request with retry logic and jittered backoff.
+
+    Retries on 429/500/503 status codes or empty responses.
+    Uses async sleep to avoid blocking the event loop.
+    """
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+
+            # Check if content is empty and retry
+            content = _extract_content(result)
+            if not content and attempt < max_retries:
+                base_wait = _client_config.empty_response_wait * (attempt + 1)
+                wait = base_wait * (_client_config.jitter_factor + random.random())
+                logger.warning("[%s] Empty response, retrying in %.1fs...", log_prefix, wait)
+                await asyncio.sleep(wait)
+                continue
+
+            return result
+
+        except httpx.HTTPStatusError as e:
+            last_error = Exception(
+                f"{error_prefix} request failed with status {e.response.status_code}: {e.response.text}"
+            )
+            if e.response.status_code in (429, 500, 503) and attempt < max_retries:
+                base_wait = _client_config.retry_status_wait * (attempt + 1)
+                wait = base_wait * (_client_config.jitter_factor + random.random())
+                logger.warning("[%s] Status %d, retrying in %.1fs...", log_prefix, e.response.status_code, wait)
+                await asyncio.sleep(wait)
+                continue
+            raise last_error
+
+        except Exception as e:
+            last_error = Exception(f"{error_prefix} error: {str(e)}")
+            if attempt < max_retries:
+                base_wait = _client_config.retry_base_wait * (attempt + 1)
+                wait = base_wait * (_client_config.jitter_factor + random.random())
+                logger.warning("[%s] Error, retrying in %.1fs...", log_prefix, wait)
+                await asyncio.sleep(wait)
+                continue
+            raise last_error
+
+    raise last_error or Exception(f"{log_prefix} max retries exceeded")
+
+
 class AIClient:
     def __init__(self, endpoint_url: str, model_name: str, api_key: Optional[str] = None):
         self._endpoint_url = endpoint_url.rstrip('/')
@@ -187,50 +245,10 @@ class AIClient:
             "temperature": temperature,
         }
 
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                response = await self._client.post(url, json=payload, headers=self._headers)
-                response.raise_for_status()
-                result = response.json()
-
-                # Check if content is empty and retry
-                content = _extract_content(result)
-                if not content and attempt < max_retries:
-                    # (L2) Jitter: randomize wait time to prevent thunder-herd retries
-                    base_wait = _client_config.empty_response_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[AIClient] Empty response, retrying in %.1fs...", wait)
-                    await asyncio.sleep(wait)
-                    continue
-
-                return result
-
-            except httpx.HTTPStatusError as e:
-                last_error = Exception(
-                    f"API request failed with status {e.response.status_code}: {e.response.text}"
-                )
-                if e.response.status_code in (429, 500, 503) and attempt < max_retries:
-                    # (L2) Jitter for status code retries
-                    base_wait = _client_config.retry_status_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[AIClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
-                    await asyncio.sleep(wait)
-                    continue
-                raise last_error
-
-            except Exception as e:
-                last_error = Exception(f"An error occurred: {str(e)}")
-                if attempt < max_retries:
-                    # (L2) Jitter for general error retries
-                    base_wait = _client_config.retry_base_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[AIClient] Error, retrying in %.1fs...", wait)
-                    await asyncio.sleep(wait)
-                    continue
-                raise last_error
-
-        raise last_error or Exception("Max retries exceeded")
+        return await _retry_request(
+            self._client, url, payload, self._headers, max_retries,
+            "AIClient", "API",
+        )
 
     async def close(self):
         """Close the underlying HTTP client."""
@@ -374,46 +392,7 @@ class ReviewerClient:
             "temperature": temperature,
         }
 
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                response = await self._main._client.post(url, json=payload, headers=self._headers)
-                response.raise_for_status()
-                result = response.json()
-
-                content = _extract_content(result)
-                if not content and attempt < max_retries:
-                    # (L2) Jitter for empty response retries
-                    base_wait = _client_config.empty_response_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[ReviewerClient] Empty response, retrying in %.1fs...", wait)
-                    await asyncio.sleep(wait)
-                    continue
-
-                return result
-
-            except httpx.HTTPStatusError as e:
-                last_error = Exception(
-                    f"Reviewer API request failed with status {e.response.status_code}: {e.response.text}"
-                )
-                if e.response.status_code in (429, 500, 503) and attempt < max_retries:
-                    # (L2) Jitter for status code retries
-                    base_wait = _client_config.retry_status_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[ReviewerClient] Status %d, retrying in %.1fs...", e.response.status_code, wait)
-                    await asyncio.sleep(wait)
-                    continue
-                raise last_error
-
-            except Exception as e:
-                last_error = Exception(f"Reviewer error: {str(e)}")
-                if attempt < max_retries:
-                    # (L2) Jitter for general error retries
-                    base_wait = _client_config.retry_base_wait * (attempt + 1)
-                    wait = base_wait * (_client_config.jitter_factor + random.random())
-                    logger.warning("[ReviewerClient] Error, retrying in %.1fs...", wait)
-                    await asyncio.sleep(wait)
-                    continue
-                raise last_error
-
-        raise last_error or Exception("Reviewer max retries exceeded")
+        return await _retry_request(
+            self._main._client, url, payload, self._headers, max_retries,
+            "ReviewerClient", "Reviewer API",
+        )

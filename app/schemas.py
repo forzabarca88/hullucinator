@@ -74,3 +74,36 @@ class AIConfig(BaseModel):
     # Review thresholds for chunked review of long books
     review_word_threshold: int = Field(default=SCHEMA_DEFAULT_WORD_THRESHOLD, ge=SCHEMA_WORD_THRESHOLD_MIN, description="Words before chunked review is used")
     review_chunk_size: int = Field(default=SCHEMA_DEFAULT_CHUNK_SIZE, ge=1, le=20, description="Chapters per review chunk")
+
+
+class AIConfigUpdate(BaseModel):
+    """Schema for updating AI configuration."""
+    endpoint_url: str | None = None
+    model_name: str | None = None
+    api_key: str | None = None
+    # Reviewer settings (optional — empty/None means use same as writer)
+    reviewer_endpoint_url: str | None = None
+    reviewer_model_name: str | None = None
+    reviewer_api_key: str | None = None
+    review_max_turns: int | None = None
+    review_word_threshold: int | None = None
+    review_chunk_size: int | None = None
+
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+
+
+class AIConfigResponse(BaseModel):
+    """Schema for the GET /api/config response."""
+    configured: bool
+    endpoint_url: str
+    model_name: str
+    api_key_set: bool
+    reviewer_endpoint_url: str
+    reviewer_model_name: str
+    reviewer_api_key_set: bool
+    review_max_turns: int
+    review_word_threshold: int
+    review_chunk_size: int

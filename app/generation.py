@@ -186,12 +186,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
         book.chapters[title] = chapter_content
 
         # Generate chapter summary for continuity
-        summary_messages = [
-            {"role": "system", "content": "Summarize this chapter in one concise paragraph."},
-            {"role": "user", "content": chapter_content},
-        ]
-        summary_response = await ai_client.generate_completion(summary_messages, temperature=0.3)
-        book.chapter_summaries[title] = _extract_content(summary_response)
+        book.chapter_summaries[title] = await _summarize_chapter(ai_client, chapter_content, title)
 
         _update_progress(book, f"Completed {title}", total_chapters=total, chapters_completed=i + 1,
                          percentage=40 + int((i + 1) / total * 30))
@@ -204,3 +199,25 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
     save_book(book.id, book)
 
     logger.info("All %d chapters generated for '%s' (%s)", total, book.title, book.id)
+
+
+async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_title: str) -> str:
+    """
+    Generate a concise one-paragraph summary of a chapter.
+    Used to provide continuity context for subsequent chapters.
+    """
+    messages = [
+        {"role": "system", "content": (
+            "You are a literary analyst. Summarize the following chapter in a single, concise paragraph "
+            "(2-4 sentences) capturing the key events, character developments, and any plot threads "
+            "that carry forward to the next chapter."
+        )},
+        {"role": "user", "content": (
+            f"Chapter: {chapter_title}\n\n"
+            f"Content:\n{chapter_content}\n\n"
+            f"Provide only the summary paragraph, nothing else."
+        )},
+    ]
+
+    response = await ai_client.generate_completion(messages, temperature=0.3)
+    return _extract_content(response)

@@ -1,8 +1,9 @@
 """
 Parsing utilities for extracting structured data from LLM responses.
 
-Handles outline parsing (JSON and prose formats), critique parsing
-(JSON and text fallbacks), and fuzzy chapter title matching.
+Handles outline parsing (JSON, code fences, numbered/bulleted lists,
+markdown headings, and plain prose), critique parsing (JSON and text
+fallbacks), and fuzzy chapter title matching.
 """
 import re
 import json
@@ -16,15 +17,34 @@ logger = logging.getLogger(__name__)
 
 def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
     """
-    Parse outline from LLM response, handling JSON, code fences, and prose text.
+    Parse outline from LLM response, handling JSON, code fences, and
+    prose text. Returns a list of chapter titles. Falls back to default
+    chapters if no parseable content is found.
 
-    Returns a list of chapter titles. Falls back to default chapters
-    if no parseable content is found.
+    Handles:
+    - JSON arrays: ["Chapter 1: Title", ...]
+    - JSON objects: {"chapters": [...]}
+    - Numbered lists: "1. Title", "Chapter 1: Title", "1) Title"
+    - Markdown headings: "# Chapter 1: Title"
+    - Bullet lists: "- Title", "* Title"
+    - Plain prose with chapter references
     """
     content = _extract_content(raw) if isinstance(raw, dict) else raw
     if not content or not content.strip():
         logger.warning("Empty outline response, using default chapters")
         return list(default_chapters)
+
+    # Clean up markdown code blocks (standalone ```)
+    clean = content.strip()
+    if clean.startswith("```"):
+        parts = clean.split("```")
+        if len(parts) >= 2:
+            clean = parts[1]
+        # Strip language label
+        first_newline = clean.find("\n")
+        if first_newline > 0 and clean[:first_newline].strip().isalpha():
+            clean = clean[first_newline + 1:]
+        clean = clean.strip()
 
     # Try to extract JSON from code fences
     json_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", content, re.DOTALL)
@@ -33,12 +53,21 @@ def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
     else:
         # Try to find JSON object in text
         json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        json_str = json_match.group(0) if json_match else None
+        if json_match:
+            json_str = json_match.group(0)
+        else:
+            # Try to find JSON array in text
+            json_match = re.search(r"\[.*\]", content, re.DOTALL)
+            json_str = json_match.group(0) if json_match else None
 
     # Try JSON parsing
     if json_str:
         try:
             data = json.loads(json_str)
+            if isinstance(data, list):
+                chapters = [str(item).strip() for item in data if str(item).strip()]
+                if chapters:
+                    return chapters
             if "chapters" in data:
                 chapters = data["chapters"]
                 if isinstance(chapters, list):
@@ -48,25 +77,57 @@ def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
         except json.JSONDecodeError:
             pass
 
-    # Fallback: parse numbered lines
-    lines = content.strip().split("\n")
+    # Fallback: line-based parsing with heuristic marker detection
+    lines = content.split("\n")
     chapters = []
     for line in lines:
-        line = line.strip()
-        if not line:
+        clean_line = line.strip()
+        if not clean_line:
             continue
-        # Match "Chapter N: Title" or "N. Title" or "N) Title"
-        match = re.match(r"(?i)chapter\s+\d+[:\.]\s*(.+)", line)
-        if not match:
-            match = re.match(r"\d+[\)\.]\s*(.+)", line)
-        if match:
-            chapters.append(match.group(1).strip())
 
-    if chapters:
-        return chapters
+        # Skip markdown code fence markers
+        if clean_line.startswith("```"):
+            continue
 
-    logger.warning("Could not parse outline, using default chapters")
-    return list(default_chapters)
+        # Detect various list markers
+        parsed_title = None
+
+        # "Chapter N: Title" or "Chapter N - Title" or "Chapter N. Title"
+        chapter_match = re.match(r"(?i)^(chapter\s+\d+[:\.\-]\s*)(.+)$", clean_line)
+        if chapter_match:
+            parsed_title = chapter_match.group(2).strip()
+
+        # Numbered: "1. Title", "1) Title"
+        num_match = re.match(r"^(\d+[.)]\s+)(.+)$", clean_line)
+        if not parsed_title and num_match:
+            parsed_title = num_match.group(2).strip()
+
+        # Markdown heading: "# Chapter 1: Title"
+        if not parsed_title:
+            heading_match = re.match(r"^#{1,6}\s+(.+)$", clean_line)
+            if heading_match:
+                parsed_title = heading_match.group(1).strip()
+
+        # Bullet: "- Title" or "* Title"
+        if not parsed_title:
+            bullet_match = re.match(r"^[-*]\s+(.+)$", clean_line)
+            if bullet_match:
+                parsed_title = bullet_match.group(1).strip()
+
+        # Plain line that looks like a chapter title
+        if not parsed_title and len(clean_line) > 3:
+            if any(marker in clean_line.lower() for marker in
+                    ["chapter", "part", "section", "prologue", "epilogue"]):
+                parsed_title = clean_line
+
+        if parsed_title:
+            chapters.append(parsed_title)
+
+    if not chapters:
+        logger.warning("Could not parse outline, using default chapters")
+        return list(default_chapters)
+
+    return chapters
 
 
 def parse_critique(raw: str) -> Dict[str, Any]:
@@ -90,7 +151,12 @@ def parse_critique(raw: str) -> Dict[str, Any]:
     else:
         # Try to find JSON object in text
         json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        json_str = json_match.group(0) if json_match else None
+        if json_match:
+            json_str = json_match.group(0)
+        else:
+            # Try to find JSON array in text
+            json_match = re.search(r"\[.*\]", content, re.DOTALL)
+            json_str = json_match.group(0) if json_match else None
 
     # Try JSON parsing
     if json_str:
@@ -196,6 +262,9 @@ def match_chapter_title(query: str, chapters: Dict[str, str]) -> Optional[str]:
 def _normalize_title(title: str) -> str:
     """Normalize a title for comparison: lowercase, remove punctuation, collapse whitespace."""
     normalized = title.lower()
+    # Remove hyphens within words (merge connected parts, e.g. "Mid-Point" -> "midpoint")
+    normalized = normalized.replace("-", "")
+    # Replace remaining punctuation with spaces
     normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
