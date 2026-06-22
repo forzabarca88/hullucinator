@@ -90,6 +90,7 @@ def create_router(
     active_tasks: dict,
     get_semaphore,
     check_configured,
+    check_configured_and_connected,
     check_endpoint,
 ) -> APIRouter:
     """Create an APIRouter with all Hullucinator endpoints.
@@ -407,10 +408,13 @@ def create_router(
         """
         Create a new book and start generation in the background.
 
+        Validates API credentials (endpoint + model + key) with a live test
+        request before queuing, to avoid accepting books that will fail immediately.
+
         Returns the book_id immediately so the client can poll for progress.
         Generation is rate-limited by a semaphore to prevent resource exhaustion.
         """
-        check_configured()
+        await check_configured_and_connected()
 
         book_id = str(uuid.uuid4())
         book_state = BookState(
@@ -484,9 +488,10 @@ def create_router(
         Trigger an iterative professional review of a completed book.
         Runs critique → correct → re-critique until approved or max turns reached.
 
+        Validates API credentials before queuing.
         The review runs in the background. Poll the book status to track progress.
         """
-        check_configured()
+        await check_configured_and_connected()
 
         book_state = load_book(book_id)
         if not book_state:
@@ -569,10 +574,13 @@ def create_router(
     async def retry_book_endpoint(book_id: str, background_tasks: BackgroundTasks):
         """Retry a failed book by creating a new one with the same parameters.
 
+        Validates API credentials (endpoint + model + key) with a live test
+        request before queuing, to avoid accepting retries that will fail immediately.
+
         Loads the failed book's fields, constructs a new BookCreateRequest,
         queues generation in the background, and deletes the old book.
         """
-        check_configured()
+        await check_configured_and_connected()
 
         book_state = load_book(book_id)
         if not book_state:

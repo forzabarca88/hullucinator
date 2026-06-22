@@ -27,7 +27,7 @@ _client_config = get_default_shared_config().client
 
 
 def _parse_models_response(result: dict) -> list:
-    """Parse OpenAI-compatible /v1/models response into a list of model dicts."""
+    """Parse OpenAI-compatible /v1/models response into a sorted list of model dicts."""
     models = []
     if "data" in result:
         for item in result["data"]:
@@ -45,6 +45,7 @@ def _parse_models_response(result: dict) -> list:
         logger.warning("Model listing returned error response: %s", result.get("error"))
     else:
         models = [{"id": k, "name": k} for k in result.keys() if isinstance(k, str)]
+    models.sort(key=lambda m: m["id"])
     return models
 
 

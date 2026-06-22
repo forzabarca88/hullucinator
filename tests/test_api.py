@@ -382,23 +382,62 @@ class TestBookEndpoints:
         assert "not configured" in data["detail"]
 
     @pytest.mark.asyncio
-    async def test_create_book_success(self, client):
-        """POST /api/books/create succeeds when configured."""
+    async def test_create_book_no_api_key(self, client):
+        """POST /api/books/create fails when API key is not set."""
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
+        ai_client.api_key = None
 
         resp = await client.post("/api/books/create", json={
             "title": "Test Book",
             "prompt": "A test book",
-            "tags": ["sci-fi"],
-            "length": "novel",
-            "review_max_turns": 2,
         })
-        assert resp.status_code == 200
+        assert resp.status_code == 400
         data = resp.json()
-        assert "book_id" in data
-        assert data["status"] == "pending"
-        assert data["review_max_turns"] == 2
+        assert "API key" in data["detail"]
+
+    @pytest.mark.asyncio
+    async def test_create_book_invalid_api_key(self, client):
+        """POST /api/books/create fails when API key is invalid (401 from LLM)."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "invalid-key"
+
+        async def mock_list_models_fail(self):
+            raise Exception("API request failed with status 401: {\"detail\":\"Unauthorized\"}")
+
+        with patch.object(type(ai_client), "list_models", mock_list_models_fail):
+            resp = await client.post("/api/books/create", json={
+                "title": "Test Book",
+                "prompt": "A test book",
+            })
+            assert resp.status_code == 400
+            data = resp.json()
+            assert "invalid" in data["detail"].lower() or "credentials" in data["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_create_book_success(self, client):
+        """POST /api/books/create succeeds when fully configured with valid credentials."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            resp = await client.post("/api/books/create", json={
+                "title": "Test Book",
+                "prompt": "A test book",
+                "tags": ["sci-fi"],
+                "length": "novel",
+                "review_max_turns": 2,
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "book_id" in data
+            assert data["status"] == "pending"
+            assert data["review_max_turns"] == 2
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_book(self, client):
@@ -422,18 +461,23 @@ class TestBookEndpoints:
         """
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
 
         # Generate a prompt that exceeds the old 5000-character limit
         long_prompt = "A detailed historical account. " * 100  # ~3000+ chars
         long_prompt += "With extensive background context and timeline details. " * 100  # well over 5000
 
-        resp = await client.post("/api/books/create", json={
-            "title": "Long Prompt Book",
-            "prompt": long_prompt,
-        })
-        assert resp.status_code == 200, f"Got {resp.status_code}: {resp.json()}"
-        data = resp.json()
-        assert "book_id" in data
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            resp = await client.post("/api/books/create", json={
+                "title": "Long Prompt Book",
+                "prompt": long_prompt,
+            })
+            assert resp.status_code == 200, f"Got {resp.status_code}: {resp.json()}"
+            data = resp.json()
+            assert "book_id" in data
 
 
 
@@ -468,87 +512,103 @@ class TestRetryEndpoint:
         """Retry creates a new book with same content and deletes the old one."""
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
 
-        # Create a book
-        resp = await client.post("/api/books/create", json={
-            "title": "Retry Test",
-            "prompt": "A test book for retry",
-            "tags": ["comedy"],
-            "length": "novella",
-            "review_max_turns": 3,
-        })
-        assert resp.status_code == 200
-        old_book = resp.json()
-        old_id = old_book["book_id"]
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
 
-        # Retry
-        resp = await client.post(f"/api/books/{old_id}/retry")
-        assert resp.status_code == 200
-        retry_response = resp.json()
-        new_book_id = retry_response["book_id"]
-        assert new_book_id != old_id
-        assert retry_response["status"] == "pending"
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book
+            resp = await client.post("/api/books/create", json={
+                "title": "Retry Test",
+                "prompt": "A test book for retry",
+                "tags": ["comedy"],
+                "length": "novella",
+                "review_max_turns": 3,
+            })
+            assert resp.status_code == 200
+            old_book = resp.json()
+            old_id = old_book["book_id"]
 
-        # Fetch the new book to verify all fields
-        resp = await client.get(f"/api/books/{new_book_id}")
-        assert resp.status_code == 200
-        new_book = resp.json()
+            # Retry
+            resp = await client.post(f"/api/books/{old_id}/retry")
+            assert resp.status_code == 200
+            retry_response = resp.json()
+            new_book_id = retry_response["book_id"]
+            assert new_book_id != old_id
+            assert retry_response["status"] == "pending"
 
-        # New book has same content
-        assert new_book["title"] == "Retry Test"
-        assert new_book["prompt"] == "A test book for retry"
-        assert new_book["tags"] == ["comedy"]
-        assert new_book["length"] == "novella"
-        assert new_book["review_max_turns"] == 3
-        assert new_book["id"] != old_id
-        assert new_book["status"] == "pending"
+            # Fetch the new book to verify all fields
+            resp = await client.get(f"/api/books/{new_book_id}")
+            assert resp.status_code == 200
+            new_book = resp.json()
 
-        # Old book is deleted
-        resp = await client.get(f"/api/books/{old_id}")
-        assert resp.status_code == 404
+            # New book has same content
+            assert new_book["title"] == "Retry Test"
+            assert new_book["prompt"] == "A test book for retry"
+            assert new_book["tags"] == ["comedy"]
+            assert new_book["length"] == "novella"
+            assert new_book["review_max_turns"] == 3
+            assert new_book["id"] != old_id
+            assert new_book["status"] == "pending"
+
+            # Old book is deleted
+            resp = await client.get(f"/api/books/{old_id}")
+            assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_retry_nonexistent_book(self, client):
         """Retry on non-existent book returns 404."""
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
-        resp = await client.post("/api/books/nonexistent/retry")
-        assert resp.status_code == 404
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            resp = await client.post("/api/books/nonexistent/retry")
+            assert resp.status_code == 404
 
     @pytest.mark.asyncio
     async def test_retry_preserves_all_fields(self, client):
         """Retry preserves all book fields including optional ones."""
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
 
-        # Create a book with all fields
-        resp = await client.post("/api/books/create", json={
-            "title": "Full Fields Test",
-            "prompt": "A comprehensive test",
-            "tags": ["sci-fi", "comedy"],
-            "length": "epic",
-            "review_max_turns": 5,
-            "skip_review": True,
-        })
-        assert resp.status_code == 200
-        old_book = resp.json()
-        old_id = old_book["book_id"]
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
 
-        # Retry
-        resp = await client.post(f"/api/books/{old_id}/retry")
-        assert resp.status_code == 200
-        retry_response = resp.json()
-        new_book_id = retry_response["book_id"]
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book with all fields
+            resp = await client.post("/api/books/create", json={
+                "title": "Full Fields Test",
+                "prompt": "A comprehensive test",
+                "tags": ["sci-fi", "comedy"],
+                "length": "epic",
+                "review_max_turns": 5,
+                "skip_review": True,
+            })
+            assert resp.status_code == 200
+            old_book = resp.json()
+            old_id = old_book["book_id"]
 
-        # Fetch the new book to verify all fields
-        resp = await client.get(f"/api/books/{new_book_id}")
-        assert resp.status_code == 200
-        new_book = resp.json()
+            # Retry
+            resp = await client.post(f"/api/books/{old_id}/retry")
+            assert resp.status_code == 200
+            retry_response = resp.json()
+            new_book_id = retry_response["book_id"]
 
-        assert new_book["title"] == "Full Fields Test"
-        assert new_book["prompt"] == "A comprehensive test"
-        assert new_book["tags"] == ["sci-fi", "comedy"]
-        assert new_book["length"] == "epic"
-        assert new_book["review_max_turns"] == 5
-        assert new_book["skip_review"] is True
-        assert new_book["status"] == "pending"
+            # Fetch the new book to verify all fields
+            resp = await client.get(f"/api/books/{new_book_id}")
+            assert resp.status_code == 200
+            new_book = resp.json()
+
+            assert new_book["title"] == "Full Fields Test"
+            assert new_book["prompt"] == "A comprehensive test"
+            assert new_book["tags"] == ["sci-fi", "comedy"]
+            assert new_book["length"] == "epic"
+            assert new_book["review_max_turns"] == 5
+            assert new_book["skip_review"] is True
+            assert new_book["status"] == "pending"
