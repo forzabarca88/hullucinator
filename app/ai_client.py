@@ -10,6 +10,7 @@ Key features:
 - Optional separate reviewer client for review/correction tasks
 """
 import asyncio
+import json
 import os
 import random
 import logging
@@ -64,12 +65,44 @@ def _extract_content(result: Dict[str, Any]) -> str:
 
     Some providers (e.g. Mistral) return content as a list of text blocks:
     [{"type": "text", "text": "..."}, ...]
+
+    Does NOT unwrap JSON-wrapped content — that's handled by the calling
+    function which knows whether JSON wrapping is expected or not.
     """
     raw = result.get("choices", [{}])[0].get("message", {}).get("content", "")
     if isinstance(raw, list):
         parts = [item.get("text", "") for item in raw if isinstance(item, dict)]
         return "\n".join(parts).strip()
     return str(raw).strip()
+
+
+def _unwrap_json_content(text: str) -> str:
+    """If text looks like JSON wrapping plain content, extract the inner text.
+
+    Returns the original text if it's not valid JSON or doesn't contain
+    a recognizable content wrapper.
+    """
+    # Try parsing as JSON
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return "\n".join(str(item) for item in data).strip()
+    if isinstance(data, dict):
+        # Check common keys for wrapped content
+        for key in ("content", "text", "body", "response", "output"):
+            if key in data:
+                return str(data[key]).strip()
+        # "chapters" key means the LLM returned JSON when asked for plain text
+        if "chapters" in data and isinstance(data["chapters"], list):
+            return "\n\n".join(str(c) for c in data["chapters"]).strip()
+        # Last resort: serialize the whole dict back
+        return json.dumps(data, indent=2)
+    return text
 
 
 async def _retry_request(
@@ -277,11 +310,6 @@ class ReviewerClient:
         self._endpoint_url = (endpoint_url or main_client.endpoint_url).rstrip('/')
         self._model_name = model_name or main_client.model_name
         self._api_key = api_key  # None means use main client's key
-        self._headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            self._headers["Authorization"] = f"Bearer {self._api_key}"
-        elif main_client.api_key:
-            self._headers["Authorization"] = f"Bearer {main_client.api_key}"
 
     @property
     def endpoint_url(self) -> str:
@@ -317,16 +345,22 @@ class ReviewerClient:
     @api_key.setter
     def api_key(self, value: Optional[str]):
         self._api_key = value
-        self._rebuild_headers()
         logger.info("Reviewer API key updated")
 
-    def _rebuild_headers(self):
-        """Rebuild the Authorization header based on current key config."""
-        self._headers = {"Content-Type": "application/json"}
+    @property
+    def _headers(self) -> dict:
+        """Compute headers dynamically, falling back to main client's API key.
+
+        Using a property ensures headers always reflect the current state of
+        both the reviewer and main client, even when the main client's API key
+        changes independently.
+        """
+        headers = {"Content-Type": "application/json"}
         if self._api_key:
-            self._headers["Authorization"] = f"Bearer {self._api_key}"
+            headers["Authorization"] = f"Bearer {self._api_key}"
         elif self._main.api_key:
-            self._headers["Authorization"] = f"Bearer {self._main.api_key}"
+            headers["Authorization"] = f"Bearer {self._main.api_key}"
+        return headers
 
     def get_config(self) -> Dict[str, Any]:
         """Return reviewer configuration (effective values with fallback)."""
@@ -345,7 +379,8 @@ class ReviewerClient:
         if model_name is not None:
             self.model_name = model_name
         if api_key is not None:
-            self.api_key = api_key
+            # Normalize empty string to None so getter falls back to main client
+            self.api_key = api_key if api_key != "" else None
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """

@@ -42,6 +42,7 @@ from app.generation import (
     generate_chapters as _gen_generate_chapters,
     _update_progress,
     _summarize_chapter,
+    _parse_chapter_range,
     LENGTH_CHAPTER_COUNT,
     LENGTH_WORD_COUNT,
 )

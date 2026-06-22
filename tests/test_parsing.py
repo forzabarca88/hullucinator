@@ -1,6 +1,6 @@
 """Tests for parsing utilities (outline, critique, chapter matching)."""
 import pytest
-from app.parsing import parse_outline, parse_critique, match_chapter_title
+from app.parsing import parse_outline, parse_critique, match_chapter_title, _extract_balanced_json
 
 
 class TestParseOutline:
@@ -165,3 +165,94 @@ class TestMatchChapterTitle:
     def test_empty_chapters(self):
         """Return None for empty chapters dict."""
         assert match_chapter_title("Some Title", {}) is None
+
+
+class TestExtractBalancedJson:
+    """Test balanced JSON extraction from text."""
+
+    def test_simple_object(self):
+        """Extract a simple JSON object."""
+        text = '{"key": "value"}'
+        assert _extract_balanced_json(text) == '{"key": "value"}'
+
+    def test_nested_object(self):
+        """Extract nested JSON object."""
+        text = '{"outer": {"inner": "value"}}'
+        assert _extract_balanced_json(text) == '{"outer": {"inner": "value"}}'
+
+    def test_simple_array(self):
+        """Extract a simple JSON array."""
+        text = '["a", "b", "c"]'
+        assert _extract_balanced_json(text) == '["a", "b", "c"]'
+
+    def test_array_of_objects(self):
+        """Extract array containing objects."""
+        text = '[{"name": "Alice"}, {"name": "Bob"}]'
+        assert _extract_balanced_json(text) == '[{"name": "Alice"}, {"name": "Bob"}]'
+
+    def test_json_with_trailing_text(self):
+        """Extract JSON even when followed by prose."""
+        text = '{"chapters": ["Ch1", "Ch2"]}\n\nSome extra text here.'
+        assert _extract_balanced_json(text) == '{"chapters": ["Ch1", "Ch2"]}'
+
+    def test_json_with_leading_text(self):
+        """Extract JSON even when preceded by prose."""
+        text = 'Here is the outline:\n{"chapters": ["Ch1"]}'
+        assert _extract_balanced_json(text) == '{"chapters": ["Ch1"]}'
+
+    def test_brackets_in_string_ignored(self):
+        """Brackets inside strings don't affect depth counting."""
+        text = '{"note": "use {curly} brackets"}'
+        assert _extract_balanced_json(text) == '{"note": "use {curly} brackets"}'
+
+    def test_no_json_returns_none(self):
+        """Returns None when no JSON is found."""
+        text = "This is plain text with no JSON."
+        assert _extract_balanced_json(text) is None
+
+    def test_invalid_json_returns_none(self):
+        """Returns None when braces don't form valid JSON."""
+        text = '{"key": }'
+        assert _extract_balanced_json(text) is None
+
+    def test_empty_string_returns_none(self):
+        """Returns None for empty input."""
+        assert _extract_balanced_json("") is None
+
+    def test_multiline_json(self):
+        """Extract multiline JSON object."""
+        text = '''{
+  "chapters": [
+    "Chapter 1: The Beginning",
+    "Chapter 2: The Journey"
+  ]
+}'''
+        result = _extract_balanced_json(text)
+        assert result is not None
+        import json
+        data = json.loads(result)
+        assert data["chapters"] == ["Chapter 1: The Beginning", "Chapter 2: The Journey"]
+
+    def test_greedy_regex_avoided(self):
+        """Balanced extraction doesn't greedily consume across multiple JSON blocks."""
+        text = '{"a": 1}\nSome text\n{"b": 2}'
+        result = _extract_balanced_json(text)
+        # Should extract only the first JSON object, not both
+        assert result == '{"a": 1}'
+
+    def test_json_fragment_in_line(self):
+        """Skip lines that look like JSON fragments in outline parsing."""
+        # This tests the regex guard in parse_outline's line-based fallback
+        # The fragment '"chapters": [' is not valid JSON, so balanced
+        # extraction returns None. Then line-based parsing skips it via
+        # the JSON fragment regex guard.
+        raw = '"chapters": [\n"Chapter 1"\n]'
+        result = parse_outline(raw, [])
+        # The balanced JSON extractor finds ["Chapter 1"] as valid JSON,
+        # so it returns that array. parse_outline parses it as a list.
+        assert result == ["Chapter 1"]
+
+        # But a truly malformed fragment like '"chapters": [' gets skipped
+        raw2 = '"chapters": ['
+        result2 = parse_outline(raw2, ["Fallback"])
+        assert result2 == ["Fallback"]

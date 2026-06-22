@@ -292,7 +292,7 @@ async function deleteBook(bookId, title) {
 function initApp() {
   initTags();
   renderLengthSelect($('bookLength'));
-  renderMaxTurnsSelect($('bookMaxTurns'));
+  renderMaxTurnsSelect($('maxTurns'));
   initCreateForm();
   initModal();
   // loadBooks runs after config check in initSettings → checkConfig
