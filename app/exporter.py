@@ -2,9 +2,9 @@
 EPUB and PDF export module.
 
 EPUB export features full CSS styling, markdown→HTML conversion, TOC, and drop caps.
-PDF export uses plain text with configurable DejaVu font paths.
+PDF export uses bundled fonts from the static directory.
 """
-import os
+
 import re
 import html as html_lib
 import logging
@@ -28,17 +28,14 @@ except ImportError:
 
 # ── PDF Font Configuration ──────────────────────────────────────────────
 
-# Default DejaVu font paths (common on Debian/Ubuntu)
-_DEFAULT_FONT_DIR = "/usr/share/fonts/truetype/dejavu"
-
-# Can be overridden via environment variable PDF_FONT_DIR
-FONT_DIR = Path(os.environ.get("PDF_FONT_DIR", _DEFAULT_FONT_DIR))
+# Use bundled fonts from static/fonts/ — no system dependencies
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "fonts"
 
 FONT_PATHS = {
-    "DejaVu": str(FONT_DIR / "DejaVuSans.ttf"),
-    "DejaVu-Bold": str(FONT_DIR / "DejaVuSans-Bold.ttf"),
-    "DejaVuMono": str(FONT_DIR / "DejaVuSansMono.ttf"),
-    "DejaVuMono-Bold": str(FONT_DIR / "DejaVuSansMono-Bold.ttf"),
+    "Playfair": str(_STATIC_DIR / "playfair-display-400.ttf"),
+    "Playfair-Bold": str(_STATIC_DIR / "playfair-display-700.ttf"),
+    "PlexMono": str(_STATIC_DIR / "ibm-plex-mono-400.ttf"),
+    "PlexMono-Bold": str(_STATIC_DIR / "ibm-plex-mono-500.ttf"),
 }
 
 
@@ -360,17 +357,17 @@ def export_to_pdf(
     # Register fonts (with error handling for missing fonts)
     fonts_registered = False
     try:
-        pdf.add_font("DejaVu", "", FONT_PATHS["DejaVu"])
-        pdf.add_font("DejaVu", "B", FONT_PATHS["DejaVu-Bold"])
-        pdf.add_font("DejaVuMono", "", FONT_PATHS["DejaVuMono"])
-        pdf.add_font("DejaVuMono", "B", FONT_PATHS["DejaVuMono-Bold"])
+        pdf.add_font("Playfair", "", FONT_PATHS["Playfair"])
+        pdf.add_font("Playfair", "B", FONT_PATHS["Playfair-Bold"])
+        pdf.add_font("PlexMono", "", FONT_PATHS["PlexMono"])
+        pdf.add_font("PlexMono", "B", FONT_PATHS["PlexMono-Bold"])
         fonts_registered = True
     except Exception as e:
         logger.error("Font registration failed: %s. Falling back to built-in fonts.", e)
 
     # Use appropriate font family name
-    font_family = "DejaVu" if fonts_registered else "Helvetica"
-    font_mono = "DejaVuMono" if fonts_registered else "Courier"
+    font_family = "Playfair" if fonts_registered else "Times"
+    font_mono = "PlexMono" if fonts_registered else "Courier"
 
     # Title page with decorative border
     pdf.set_font(font_family, "B", 20)
