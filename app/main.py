@@ -24,6 +24,7 @@ from app.schemas import AIConfig
 from app.ai_client import AIClient, ReviewerClient
 from app.orchestrator import Orchestrator
 from app.storage import load_config
+from app.config import get_default_shared_config
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -98,7 +99,8 @@ server_config = ServerConfig(
 _active_tasks: dict[str, "asyncio.Task"] = {}
 
 # Concurrency limiter: controls how many books can be generated simultaneously
-MAX_CONCURRENT_GENERATIONS = int(os.environ.get("HULLUCINATOR_MAX_CONCURRENT", "5"))
+_shared_config = get_default_shared_config()
+MAX_CONCURRENT_GENERATIONS = int(os.environ.get("HULLUCINATOR_MAX_CONCURRENT", str(_shared_config.concurrency.max_concurrent_generations)))
 _generation_semaphore: asyncio.Semaphore | None = None
 
 

@@ -25,6 +25,9 @@ from app.schemas import BookState, BookCreateRequest, AIConfig, AIConfigUpdate, 
 
 logger = logging.getLogger(__name__)
 
+# Shared config for fallback defaults
+_default_config = get_default_shared_config()
+
 
 def _safe_download_name(title: str) -> str:
     """Sanitize a title for use as a filename."""
@@ -145,9 +148,9 @@ def create_router(
 
         # Use persisted config values, or fall back to defaults
         persisted = server_config.persisted
-        default_turns = persisted.review_max_turns if persisted else 2
-        default_word_threshold = persisted.review_word_threshold if persisted else 30_000
-        default_chunk_size = persisted.review_chunk_size if persisted else 5
+        default_turns = persisted.review_max_turns if persisted else _default_config.review.max_turns_default
+        default_word_threshold = persisted.review_word_threshold if persisted else _default_config.review.word_threshold_default
+        default_chunk_size = persisted.review_chunk_size if persisted else _default_config.review.chunk_size_default
 
         # Re-evaluate configured status from live client state
         server_config.configured = bool(ai_client.endpoint_url and ai_client.model_name)
@@ -212,9 +215,9 @@ def create_router(
             model_name=config.model_name or ai_client.model_name,
             reviewer_endpoint_url=config.reviewer_endpoint_url or (rc.endpoint_url if rc else ""),
             reviewer_model_name=config.reviewer_model_name or (rc.model_name if rc else ""),
-            review_max_turns=config.review_max_turns if config.review_max_turns is not None else (server_config.persisted.review_max_turns if server_config.persisted else 2),
-            review_word_threshold=config.review_word_threshold if config.review_word_threshold is not None else (server_config.persisted.review_word_threshold if server_config.persisted else 30_000),
-            review_chunk_size=config.review_chunk_size if config.review_chunk_size is not None else (server_config.persisted.review_chunk_size if server_config.persisted else 5),
+            review_max_turns=config.review_max_turns if config.review_max_turns is not None else (server_config.persisted.review_max_turns if server_config.persisted else _default_config.review.max_turns_default),
+            review_word_threshold=config.review_word_threshold if config.review_word_threshold is not None else (server_config.persisted.review_word_threshold if server_config.persisted else _default_config.review.word_threshold_default),
+            review_chunk_size=config.review_chunk_size if config.review_chunk_size is not None else (server_config.persisted.review_chunk_size if server_config.persisted else _default_config.review.chunk_size_default),
         )
         save_config(persisted)
         logger.info("Config saved to disk: endpoint=%s, model=%s",

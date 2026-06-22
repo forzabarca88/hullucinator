@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.config import SharedConfig, LengthConfig, StatusConfig, ReviewConfig, ClientConfig, UISchema, get_default_shared_config
+from app.config import SharedConfig, LengthConfig, StatusConfig, ReviewConfig, GenerationConfig, ClientConfig, ConcurrencyConfig, ValidationConfig, UISchema, get_default_shared_config
 
 
 class TestSharedConfig:
@@ -92,6 +92,9 @@ class TestSharedConfig:
                 pass_score=8,
                 fail_score=5,
             ),
+            generation=GenerationConfig(),
+            concurrency=ConcurrencyConfig(),
+            validation=ValidationConfig(),
             client=ClientConfig(),
             ui=UISchema(),
         )
@@ -106,6 +109,9 @@ class TestSharedConfig:
                 lengths=[],
                 statuses=[],
                 review=ReviewConfig(max_turns_default=0),
+                generation=GenerationConfig(),
+                concurrency=ConcurrencyConfig(),
+                validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
             )
@@ -114,6 +120,9 @@ class TestSharedConfig:
                 lengths=[],
                 statuses=[],
                 review=ReviewConfig(max_turns_default=11),
+                generation=GenerationConfig(),
+                concurrency=ConcurrencyConfig(),
+                validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
             )
@@ -125,6 +134,9 @@ class TestSharedConfig:
                 lengths=[],
                 statuses=[],
                 review=ReviewConfig(word_threshold_default=100),
+                generation=GenerationConfig(),
+                concurrency=ConcurrencyConfig(),
+                validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
             )
@@ -136,6 +148,9 @@ class TestSharedConfig:
                 lengths=[],
                 statuses=[],
                 review=ReviewConfig(chunk_size_default=0),
+                generation=GenerationConfig(),
+                concurrency=ConcurrencyConfig(),
+                validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
             )
@@ -144,6 +159,9 @@ class TestSharedConfig:
                 lengths=[],
                 statuses=[],
                 review=ReviewConfig(chunk_size_default=21),
+                generation=GenerationConfig(),
+                concurrency=ConcurrencyConfig(),
+                validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
             )

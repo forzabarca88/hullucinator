@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Shared config for retry/timeout defaults
 _client_config = get_default_shared_config().client
+_gen_config = get_default_shared_config().generation
 
 
 def _parse_models_response(result: dict) -> list:
@@ -255,7 +256,7 @@ class AIClient:
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
+        temperature: float = _gen_config.summary_temperature,
         max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -409,7 +410,7 @@ class ReviewerClient:
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
+        temperature: float = _gen_config.summary_temperature,
         max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
     ) -> Dict[str, Any]:

@@ -16,7 +16,7 @@ SCHEMA_DEFAULT_WORD_THRESHOLD = _DEFAULTS.review.word_threshold_default
 SCHEMA_DEFAULT_CHUNK_SIZE = _DEFAULTS.review.chunk_size_default
 SCHEMA_MAX_TURNS_MIN = _DEFAULTS.review.max_turns_min
 SCHEMA_MAX_TURNS_MAX = _DEFAULTS.review.max_turns_max
-SCHEMA_WORD_THRESHOLD_MIN = 1_000  # minimum from ReviewConfig constraints
+SCHEMA_WORD_THRESHOLD_MIN = _DEFAULTS.validation.min_word_threshold
 
 
 class BookState(BaseModel):

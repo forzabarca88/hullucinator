@@ -79,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 # Shared config — single source of truth for all tunable parameters
 _shared_config = get_default_shared_config()
+_gen_config = _shared_config.generation
 
 
 class Orchestrator:
