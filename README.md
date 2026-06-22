@@ -1,6 +1,6 @@
 # Hullucinator — AI-Powered E-Book Generator
 
-A FastAPI service with a polished web interface that generates complete e-books from a simple prompt. Provide a title, a topic, genre tags, and desired book length — the system orchestrates an LLM to produce a summary, chapter outline, full chapter content with narrative continuity, professional review with corrections, and exports to EPUB or PDF.
+Generate complete e-books from a simple prompt. Provide a title, topic, genre tags, and desired length — the system orchestrates an LLM to produce a polished book with professional review, then exports to EPUB or PDF.
 
 ## Features
 
@@ -18,220 +18,27 @@ A FastAPI service with a polished web interface that generates complete e-books 
 
 ## Quick Start
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+### Install
 
-# Configure AI provider (copy and edit)
+Hullucinator uses `uv` for package management. Create a virtual environment and install dependencies:
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+### Configure
+
+Create a `.env` file from the provided template:
+
+```bash
 cp .env.example .env
-
-# Start the server
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Or use the CLI entry point
-hullucinator
 ```
 
-Open http://localhost:8000 in your browser to use the web interface. On first launch, the setup wizard guides you through configuring your AI provider.
+Edit `.env` to point at your LLM provider:
 
-## Testing
-
-```bash
-# Run the full test suite (uses .venv virtual environment)
-.venv/bin/pytest -x -q
-
-# Run specific test file
-.venv/bin/pytest tests/test_api.py -v
-
-# Run with coverage
-.venv/bin/pytest --cov=app --cov=tests -x -q
-```
-
-The test suite includes 175 tests across 10 test files covering backend logic, API endpoints, AI client, parsing, schemas, config, concurrency, export, storage, and frontend integrity.
-
-## Web Interface
-
-The built-in web interface provides:
-
-- **Create books** — Enter a title, prompt, genre tags, and book length, then click "Generate Book"
-- **Genre tags** — Comma-separated tags (e.g. "comedy, time travel") guide the story's tone and style
-- **Book length** — Choose Short Story, Novella, Novel, or Epic / Saga to control chapter count and word count
-- **Live progress** — Real-time progress bar showing generation status (including review phase)
-- **Book library** — Browse all your generated books with status indicators, tags, and length badges
-- **Book details** — View summary, outline, chapter content, and review audit trail
-- **Professional review** — See critique score, verdict, and corrections applied
-- **Downloads** — Export completed books as EPUB (with genre metadata and review info) or PDF
-- **Delete books** — Remove books from the library via hover button on cards or delete button in detail modal (with confirmation)
-- **Retry failed books** — Restart generation for failed books; the old failed entry is automatically removed
-- **Auto-polling** — Progress updates automatically without page refresh
-- **Settings panel** — Configure AI endpoint URL, API key, model, reviewer endpoint, reviewer model, and max review turns from the GUI (top-right ⚙️ button)
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Web interface (HTML) |
-| `GET` | `/api/health` | Health check |
-| `GET` | `/api/config` | Get current AI configuration (writer + reviewer settings) |
-| `POST` | `/api/config` | Update AI configuration at runtime (writer endpoint/model/key, reviewer endpoint/model/key, max review turns, review thresholds). Persisted to `~/.hullucinator_data/data/config.json` (no API keys). |
-| `GET` | `/api/config-schema` | Get shared configuration schema for frontend (length options, status labels, review defaults, UI schema) |
-| `GET` | `/api/models` | List available models from writer's LLM provider |
-| `GET` | `/api/reviewer/models` | List available models from reviewer's LLM provider |
-| `POST` | `/api/books/create` | Create a new book (background generation) |
-| `GET` | `/api/books` | List all books |
-| `GET` | `/api/books/{book_id}` | Get book status and content |
-| `GET` | `/api/books/{book_id}/validate` | Validate book completeness |
-| `POST` | `/api/books/{book_id}/review` | Trigger professional review |
-| `POST` | `/api/books/{book_id}/retry` | Retry failed book (creates new book, deletes old) |
-| `DELETE` | `/api/books/{book_id}` | Delete a book (cancels active task if generating) |
-| `GET` | `/api/books/{book_id}/export/{format}` | Download as `epub` or `pdf` |
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | Writer LLM API endpoint |
-| `AI_MODEL_NAME` | `qwen3.6-27b` | Writer model name |
-| `AI_API_KEY` | *(empty)* | API key (Bearer auth) |
-| `REVIEWER_ENDPOINT_URL` | *(empty)* | Reviewer LLM endpoint (empty = use writer's) |
-| `REVIEWER_MODEL_NAME` | *(empty)* | Reviewer model (empty = use writer's) |
-| `REVIEWER_API_KEY` | *(empty)* | Reviewer API key (empty = use writer's) |
-| `HULLUCINATOR_HOST` | `0.0.0.0` | Server bind address |
-| `HULLUCINATOR_PORT` | `8000` | Server port |
-| `PDF_FONT_DIR` | `/usr/share/fonts/truetype/dejavu` | PDF font directory |
-| `LOG_LEVEL` | `INFO` | Logging level |
-
-### Runtime Configuration
-
-AI settings can be changed at runtime without restarting the server:
-
-```bash
-# Update writer endpoint and model
-curl -X POST http://localhost:8000/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"endpoint_url": "http://my-server:8080", "model_name": "llama3-70b"}'
-
-# Configure separate reviewer
-curl -X POST http://localhost:8000/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"reviewer_endpoint_url": "http://reviewer-server:9000", "reviewer_model_name": "critic-model", "reviewer_api_key": "sk-reviewer-key", "review_max_turns": 3, "review_word_threshold": 25000, "review_chunk_size": 4}'
-
-# Update API key only
-curl -X POST http://localhost:8000/api/config \
-  -H "Content-Type: application/json" \
-  -d '{"api_key": "sk-new-key-here"}'
-
-# List available models
-curl http://localhost:8000/api/models
-```
-
-**Note:** Config changes are persisted to `~/.hullucinator_data/data/config.json` automatically. API keys are never saved for security.
-
-### Create a Book (API)
-
-```bash
-curl -X POST http://localhost:8000/api/books/create \
-  -H "Content-Type: application/json" \
-  -d '{"title": "The Martian Garden", "prompt": "A short story about a botanist who grows a garden on Mars.", "tags": ["science fiction", "comedy"], "length": "short_story", "review_max_turns": 2}'
-```
-
-**Book length options:**
-
-| Length | Chapters | Target Word Count |
-|--------|----------|-------------------|
-| `short_story` | 1 | 1,000–7,500 |
-| `novella` | 3–5 | 7,500–20,000 |
-| `novel` | 8–15 | 20,000–50,000 |
-| `epic` | 15–25 | 50,000+ |
-
-**Tags** (optional) guide the LLM on genre, tone, and themes. Examples: `comedy`, `dark fantasy`, `biography`, `space opera`.
-
-**Max review turns** (optional, default: 2) controls how many critique→correct iterations the reviewer will perform. Set per-book or globally via the Settings panel.
-
-Response (returns immediately, generation runs in background):
-```json
-{"book_id": "567a1645-7fb7-4b85-a7f4-0be75b849c99", "status": "pending", "review_max_turns": 2}
-```
-
-### Check Progress
-
-```bash
-curl http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99
-```
-
-### Trigger Review
-
-```bash
-curl -X POST http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99/review
-```
-
-### Export
-
-```bash
-# EPUB (rich formatting, table of contents, CSS styling, review metadata)
-curl -o mybook.epub http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99/export/epub
-
-# PDF (simpler formatting, plain text, review metadata on title page)
-curl -o mybook.pdf http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99/export/pdf
-```
-
-### Delete
-
-```bash
-curl -X DELETE http://localhost:8000/api/books/567a1645-7fb7-4b85-a7f4-0be75b849c99
-```
-
-Deletes the book permanently. If the book is actively being generated, the background task is cancelled first. In the web UI, a delete button (🗑) appears on book cards (visible on hover) and in the detail modal. Confirmation is required before deletion.
-
-## Book Generation Pipeline
-
-The orchestrator coordinates these steps sequentially, delegating to specialized modules:
-
-1. **Summary** (`app/generation.py`) — LLM generates a detailed book summary from the prompt, guided by genre tags and length
-2. **Outline** (`app/generation.py`) — LLM produces chapter titles from the summary, with chapter count determined by book length
-3. **Chapters** (`app/generation.py`) — Each chapter is generated one at a time with **cumulative context** from prior chapters:
-   - Book summary (overall direction)
-   - Full outline (structural awareness)
-   - Condensed summaries of all previously generated chapters (narrative continuity)
-4. **Review** (`app/review.py`) — Professional critic reviews the complete book using an **iterative correction loop**:
-   - Critic evaluates the full book and identifies issues (plot holes, inconsistencies, pacing, continuity)
-   - Affected chapters are re-revisioned with full context
-   - Critic re-evaluates the corrected book
-   - Loop continues until the book passes review (score ≥ 7) or max turns is reached
-   - Full per-turn audit trail stored in `review_history`
-   - Uses a separate reviewer LLM if configured (`REVIEWER_ENDPOINT_URL`/`REVIEWER_MODEL_NAME`)
-   - **Chunked review** for long books (>30,000 words or >10 chapters): reviews in batches to avoid context overflow
-
-Status transitions (`app/status.py`): `pending` → `summary_generated` → `outline_generated` → `in_progress` → `completed` → `reviewing` → `reviewed` (or `failed` at any step)
-
-Generation runs as a **background task** — the API returns immediately and you can poll `/api/books/{book_id}` for progress. The review step runs automatically after chapter generation completes, or can be triggered manually via `POST /api/books/{book_id}/review`.
-
-### Architecture
-
-The codebase is organized into focused modules:
-
-| Module | Responsibility |
-|--------|---------------|
-| `app/config.py` | Shared configuration — single source of truth |
-| `app/schemas.py` | Pydantic data models |
-| `app/storage.py` | JSON file persistence |
-| `app/ai_client.py` | LLM API client with shared retry logic |
-| `app/status.py` | Status transition management |
-| `app/parsing.py` | LLM response parsing |
-| `app/generation.py` | Book generation pipeline |
-| `app/review.py` | Review pipeline (full + chunked) |
-| `app/validators.py` | Input validation |
-| `app/orchestrator.py` | Slim coordinator (~150 lines) |
-| `app/middleware.py` | CORS, security headers |
-| `app/routes.py` | All API endpoints |
-| `app/main.py` | Application bootstrap |
-| `app/exporter.py` | EPUB & PDF export |
-
-## Configuration
-
-Create a `.env` file from `.env.example`:
-
-```bash
+```ini
 # AI Provider (Writer)
 AI_ENDPOINT_URL=http://your-llm-server:8080
 AI_MODEL_NAME=your-model-name
@@ -247,60 +54,102 @@ HULLUCINATOR_HOST=0.0.0.0
 HULLUCINATOR_PORT=8000
 ```
 
-You can also configure the AI provider directly from the web interface using the ⚙️ Settings panel.
+You can also configure everything from the web interface using the ⚙️ Settings panel — no `.env` file needed.
 
-## Project Structure
+### Run
 
+```bash
+# Start the server
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Or use the CLI entry point
+hullucinator
 ```
-hullucinator/
-├── app/
-│   ├── __init__.py
-│   ├── config.py        # Shared configuration — single source of truth (Pydantic sub-models)
-│   ├── schemas.py       # Pydantic data models (BookState, BookCreateRequest, AIConfig, etc.)
-│   ├── storage.py       # JSON file persistence + config persistence
-│   ├── ai_client.py     # LLM API client (async, persistent connection, shared retry logic). Includes ReviewerClient.
-│   ├── status.py        # Status transition management (VALID_TRANSITIONS, _transition)
-│   ├── parsing.py       # LLM response parsing (outline, critique, chapter title matching)
-│   ├── generation.py    # Book generation pipeline (summary, outline, chapters with continuity)
-│   ├── review.py        # Review pipeline (full/chunked review, iterative correction loop)
-│   ├── validators.py    # Validation helpers (create request, book state, AI config)
-│   ├── orchestrator.py  # Slim pipeline coordinator (~150 lines, delegates to specialized modules)
-│   ├── middleware.py    # CORS, security headers, no-cache middleware
-│   ├── routes.py        # All /api/ endpoint definitions (config, models, books, export)
-│   ├── main.py          # Application bootstrap (FastAPI init, middleware, router, static files)
-│   └── exporter.py      # EPUB & PDF export (configurable fonts, review metadata)
-├── static/
-│   ├── css/
-│   │   └── styles.css   # All styles (variables, components, responsive)
-│   ├── js/
-│   │   ├── config.js    # Shared config loader and renderer helpers
-│   │   ├── ui.js        # Shared utilities (apiFetch, toast, polling, escaping)
-│   │   ├── renderers.js # UI rendering (status badge, book cards, detail modal, review section)
-│   │   ├── app.js       # Main app logic (create form, library, detail modal, actions)
-│   │   ├── settings.js  # Settings panel (writer/reviewer config, model fetch, persistence)
-│   │   └── boot.js      # Bootstrapper (loads shared config, initializes app and settings)
-│   └── index.html       # Clean HTML skeleton (links CSS/JS, defines DOM structure)
-├── ~/.hullucinator_data/   # User data directory (cross-platform)
-│   ├── data/
-│   │   ├── books/           # Generated books stored as JSON files
-│   │   └── config.json      # Persisted AI config (endpoint URLs, model names, review settings — no API keys)
-│   └── exports/             # Exported EPUB/PDF files
-├── .env.example         # Environment variable template
-├── pyproject.toml       # Python project metadata & dependencies
-├── requirements.txt     # Pip dependencies
-├── Dockerfile           # Container build
-├── AGENTS.md            # Architectural decisions and conventions
-└── README.md
-```
+
+Open http://localhost:8000 in your browser. On first launch, the setup wizard guides you through configuring your AI provider.
+
+## Using the Web Interface
+
+### Create a Book
+
+1. Enter a **title** for your book
+2. Write a **prompt** describing what you want the book to be about
+3. Add optional **genre tags** (comma-separated, e.g. "comedy, time travel") to guide tone and style
+4. Choose a **book length**:
+   | Length | Chapters | Target Word Count |
+   |--------|----------|-------------------|
+   | Short Story | 1 | 1,000–7,500 |
+   | Novella | 3–5 | 7,500–20,000 |
+   | Novel | 8–15 | 20,000–50,000 |
+   | Epic / Saga | 15–25 | 50,000+ |
+5. Click **"Generate Book"** — generation runs in the background with a live progress bar
+
+### Browse Your Library
+
+- See all generated books with status indicators, genre tags, and length badges
+- Click any book to view its summary, outline, chapter content, and review audit trail
+- Progress updates automatically without refreshing the page
+
+### Review
+
+After chapter generation completes, the book goes through professional review automatically. You can see:
+- **Critique score** and verdict
+- **Corrections applied** during each review turn
+- Full per-turn audit trail
+
+You can also trigger a manual review at any time from the book detail view.
+
+### Export
+
+Once a book is complete (or reviewed), download it in your preferred format:
+
+- **EPUB** — Rich formatting, table of contents, drop caps, genre metadata, and review info
+- **PDF** — Clean formatting with configurable fonts
+
+### Delete & Retry
+
+- **Delete** — Hover over a book card to reveal the 🗑 button, or use the delete button in the detail modal. Confirmation is required.
+- **Retry** — Restart generation for failed books; the old failed entry is automatically removed.
+
+## Settings
+
+Click the ⚙️ button in the top-right corner to configure:
+
+- **Writer** — Endpoint URL, API key, and model name
+- **Reviewer** — Separate endpoint URL, API key, and model name (leave empty to use writer's settings)
+- **Max review turns** — How many critique→correct iterations per book (default: 2)
+- **Model discovery** — Fetch available models from your LLM provider directly in the settings panel
+
+Settings are saved to disk automatically and restored on restart. API keys are never persisted for security.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_ENDPOINT_URL` | `http://192.168.0.40:1234` | Writer LLM API endpoint |
+| `AI_MODEL_NAME` | `qwen3.6-27b` | Writer model name |
+| `AI_API_KEY` | *(empty)* | API key (Bearer auth) |
+| `REVIEWER_ENDPOINT_URL` | *(empty)* | Reviewer LLM endpoint |
+| `REVIEWER_MODEL_NAME` | *(empty)* | Reviewer model |
+| `REVIEWER_API_KEY` | *(empty)* | Reviewer API key |
+| `HULLUCINATOR_HOST` | `0.0.0.0` | Server bind address |
+| `HULLUCINATOR_PORT` | `8000` | Server port |
+| `LOG_LEVEL` | `INFO` | Logging level |
 
 ## Requirements
 
 - Python 3.9+
-- `fastapi`, `uvicorn`, `httpx`, `pydantic`
-- `ebooklib` (EPUB export)
-- `fpdf` (PDF export)
-- DejaVu fonts (for PDF export, configurable via `PDF_FONT_DIR`)
+- `uv` (for package management)
+- Access to an LLM API (any OpenAI-compatible endpoint)
+
+## Data Storage
+
+Generated books and configuration are stored in `~/.hullucinator_data/`:
+
+- `data/books/` — Generated books as JSON files
+- `data/config.json` — Persisted AI config (no API keys)
+- `exports/` — Exported EPUB and PDF files
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
