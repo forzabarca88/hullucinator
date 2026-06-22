@@ -3,7 +3,7 @@
  * and detail modal.
  *
  * Depends on: config.js (SHARED_CONFIG, getStatusLabel, getStatusCssClass),
- *             ui.js (esc)
+ *             ui.js (esc, renderMarkdown)
  * Used by: app.js (buildBookCardHtml, renderDetail, buildReviewSection)
  */
 
@@ -71,7 +71,7 @@ function renderDetail(book) {
 
   // Summary
   if (book.summary) {
-    html += `<div class="modal-section"><h3>Summary</h3><pre>${esc(book.summary)}</pre></div>`;
+    html += `<div class="modal-section"><h3>Summary</h3><div class="markdown-body">${renderMarkdown(book.summary)}</div></div>`;
   }
 
   // Outline
@@ -85,7 +85,7 @@ function renderDetail(book) {
     html += `<div class="modal-section"><h3>Chapters (${entries.length})</h3>`;
     for (const [title, content] of entries) {
       html += `<details><summary>${esc(title)}</summary>
-        <pre>${esc(content)}</pre></details>`;
+        <div class="markdown-body">${renderMarkdown(content)}</div></details>`;
     }
     html += `</div>`;
   }
@@ -133,37 +133,53 @@ function buildReviewSection(review, history) {
       Max turns reached — some issues may remain</p>`;
   }
 
-  if (review.critique) {
-    html += `<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-family:var(--body-font);color:var(--ash);font-size:0.85rem;font-weight:500">View Full Critique</summary>
-      <div class="review-critique">${esc(review.critique)}</div></details>`;
-  }
+  // Build turn-by-turn critique and corrections view
+  const turns = history && history.length > 0 ? history : [review];
 
-  // Correction audit trail
-  if (review.corrections && review.corrections.length) {
-    html += `<h4 style="margin-top:0.8rem;font-size:0.9rem;color:var(--ink)">Corrections Applied</h4>`;
-    for (const c of review.corrections) {
-      html += `<div class="correction-item">
-        <span class="corr-chapter">${esc(c.chapter)}</span>
-        <span class="corr-type">[${esc(c.issue_type)}]</span>
-        <div style="margin-top:0.2rem;font-size:0.8rem;color:var(--ash)">${esc(c.issue_description)}</div>
-      </div>`;
-    }
-  }
+  if (turns.length > 0) {
+    html += `<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-family:var(--body-font);color:var(--ash);font-size:0.85rem;font-weight:500">View Full Critique</summary>`;
 
-  // Iteration history
-  if (history && history.length > 1) {
-    html += `<h4 style="margin-top:1rem;font-family:var(--display-font);font-size:15px;font-weight:600;color:var(--ink)">Review History (${history.length} turns)</h4>`;
-    for (const turn of history) {
-      const tScore = turn.overall_score ?? '?';
-      const tVerdict = turn.verdict || '?';
-      const tScoreClass = tScore >= passScore ? 'good' : tScore >= failScore ? 'ok' : 'bad';
-      const tPassClass = tVerdict === 'ready' ? 'passed' : 'failed';
-      html += `<div style="background:var(--page);padding:0.5rem 0.7rem;border:1px solid var(--vellum);border-radius:0;margin-bottom:0.3rem;font-size:13px">
-        <span style="font-family:var(--body-font);font-weight:600">Turn ${turn.turn}</span>: Score <span class="review-score ${tScoreClass}" style="font-size:14px;font-family:var(--display-font);font-weight:700;display:inline">${tScore}/10</span>
-        — <span class="review-verdict ${tPassClass}" style="font-size:0.85rem">${tVerdict}</span>
-        ${turn.corrections && turn.corrections.length ? `(${turn.corrections.length} corrections)` : ''}
-      </div>`;
+    for (const turn of turns) {
+      const tNum = turn.turn;
+      html += `<div class="critique-turn">`;
+      html += `<div class="critique-turn-header">Turn ${tNum}</div>`;
+
+      // Critique text (rendered as markdown)
+      if (turn.critique) {
+        html += `<div class="review-critique markdown-body">${renderMarkdown(turn.critique)}</div>`;
+      }
+
+      // Issues found in this turn
+      if (turn.issues && turn.issues.length) {
+        html += `<div class="critique-issues"><strong>Issues (${turn.issues.length}):</strong>`;
+        for (const issue of turn.issues) {
+          html += `<div class="critique-issue">
+            <span class="corr-chapter">${esc(issue.chapter || 'unknown')}</span>
+            <span class="corr-type">[${esc(issue.type || 'general')}]</span>
+            <div class="issue-description">${esc(issue.description || '')}</div>
+            ${issue.suggestion ? `<div class="issue-suggestion">Suggestion: ${esc(issue.suggestion)}</div>` : ''}
+          </div>`;
+        }
+        html += `</div>`;
+      }
+
+      // Corrections applied in this turn
+      if (turn.corrections && turn.corrections.length) {
+        html += `<div class="critique-corrections"><strong>Corrections (${turn.corrections.length}):</strong>`;
+        for (const c of turn.corrections) {
+          html += `<div class="correction-item">
+            <span class="corr-chapter">${esc(c.chapter)}</span>
+            <span class="corr-type">[${esc(c.issue_type)}]</span>
+            <div style="margin-top:0.2rem;font-size:0.8rem;color:var(--ash)">${esc(c.issue_description)}</div>
+          </div>`;
+        }
+        html += `</div>`;
+      }
+
+      html += `</div>`;
     }
+
+    html += `</details>`;
   }
 
   html += `</div>`;
