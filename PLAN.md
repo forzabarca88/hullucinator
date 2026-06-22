@@ -13,9 +13,9 @@ A comprehensive plan to address code fragility, duplicated logic, config drift, 
 | **3. Test Suite** | ✅ Complete | New `tests/test_parsing.py` (21 tests), `tests/test_schemas.py` (21 tests), `tests/test_config.py` (16 tests), `tests/test_concurrency.py` (3 tests). Removed 16 low-value tests from `test_orchestrator.py`, `test_api.py`, `test_export.py` (replaced by focused tests in new files). **Total: 126 tests, all passing.** |
 | **4. Modularity** | ✅ DONE | New modules created: `app/status.py`, `app/parsing.py`, `app/generation.py`, `app/review.py`, `app/validators.py` — all with docstrings. `app/orchestrator.py` slimmed to 152-line coordinator that delegates to all modules. `app/middleware.py` (64 lines), `app/routes.py` (557 lines) created. `app/main.py` slimmed to 229-line bootstrap. Retry logic extracted to shared `_retry_request()` in `app/ai_client.py`. `static/js/renderers.js` (171 lines) created with `statusBadge`, `buildBookCardHtml`, `renderDetail`, `buildReviewSection` migrated from `app.js`/`ui.js` |
 | **5. Implementation Order** | Phases 1–3 ✅, Phase 4 ⚠️, Phase 5 ✅, Phase 6 ❌ | |
-| **6. Documentation** | ❌ NOT DONE | `AGENTS.md` Components table missing all 5 new modules. `README.md` Project Structure section missing new modules. Module docstrings ✅ done (all 5 new modules have docstrings) |
+| **6. Documentation** | ✅ DONE | `AGENTS.md` Components table updated with all modules (config, status, parsing, generation, review, validators, orchestrator, middleware, routes, ai_client, schemas, storage, exporter, frontend JS). `README.md` Project Structure section updated with new modules. Module docstrings ✅ done (all 5 new modules have docstrings) |
 
-**Overall completion: ~68%**
+**Overall completion: ~97%**
 
 **Test suite:** ✅ All 126 tests pass (`.venv/bin/pytest -x -q`)
 
@@ -25,8 +25,8 @@ A comprehensive plan to address code fragility, duplicated logic, config drift, 
 |------|-------|
 | `test_storage.py` | 9 |
 | `test_api.py` | 19 |
-| `test_export.py` | 18 |
-| `test_orchestrator.py` | 18 |
+| `test_export.py` | 17 |
+| `test_orchestrator.py` | 17 |
 | `test_frontend.py` | 3 |
 | `test_parsing.py` | 21 |
 | `test_schemas.py` | 21 |
@@ -70,7 +70,7 @@ Module-level helper `_build_api_url(endpoint, path_suffix)` in `app/ai_client.py
 
 **Status: ✅ DONE**
 
-Extracted as `_build_review_text(book_state, chapters, turn_num)` module-level helper in `orchestrator.py`. Both methods call it.
+Extracted as `_build_review_text(book_state, chapters, turn_num)` module-level helper in `app/review.py`. Both `_full_review()` and `_chunked_review()` call it.
 
 ---
 
@@ -78,7 +78,7 @@ Extracted as `_build_review_text(book_state, chapters, turn_num)` module-level h
 
 **Status: ✅ DONE**
 
-Extracted as `_build_revision_context(book_state, chapter_title)` module-level helper in `orchestrator.py`. Both methods call it.
+Extracted as `_build_revision_context(book_state, chapter_title)` module-level helper in `app/review.py`. Both `_full_review()` and `_chunked_review()` call it.
 
 ---
 
@@ -86,7 +86,7 @@ Extracted as `_build_revision_context(book_state, chapter_title)` module-level h
 
 **Status: ✅ DONE**
 
-Extracted as `_record_review_turn(book_state, turn_record)` module-level helper in `orchestrator.py`. Both methods call it.
+Extracted as `_record_review_turn(book_state, turn_record)` module-level helper in `app/review.py`. Both `_full_review()` and `_chunked_review()` call it.
 
 ---
 
@@ -94,7 +94,7 @@ Extracted as `_record_review_turn(book_state, turn_record)` module-level helper 
 
 **Status: ✅ DONE**
 
-Extracted as `_update_progress(book_state, step, percentage)` helper. Used throughout all generation/review methods.
+Extracted as `_update_progress(book_state, step, percentage)` helper in `app/generation.py`. Used throughout generation methods; re-exported by `app/orchestrator.py`.
 
 ---
 
@@ -136,18 +136,19 @@ All hardcoded values migrated to `SHARED_CONFIG`:
 | Value | Files affected | Status |
 |-------|---------------|--------|
 | `review_max_turns` default (2) | `schemas.py` imports from `config.py` | ✅ Migrated |
-| `review_word_threshold` default (30000) | `schemas.py`, `orchestrator.py` | ✅ Migrated |
-| `review_chunk_size` default (5) | `schemas.py`, `orchestrator.py` | ✅ Migrated |
-| `fail_score` (4) | Added to `config.py` `ReviewConfig` | ✅ Added |
-| Review score threshold (7) | `orchestrator.py` uses `REVIEW_PASS_SCORE`, `app.js` uses `SHARED_CONFIG.review.pass_score` | ✅ Migrated |
-| Length → chapter/word count mapping | `orchestrator.py` derives from `shared_config.lengths` | ✅ Migrated |
-| Retry/backoff values | `ai_client.py` uses `shared_config.client` | ✅ Migrated |
-| Polling interval (3s) | `ui.js` | ✅ Migrated (uses `SHARED_CONFIG?.ui?.polling_interval_ms ?? 3000`) |
-| Library polling interval (10s) | `ui.js` | ✅ Migrated (uses `SHARED_CONFIG?.ui?.library_polling_interval_ms ?? 10000`) |
-| Prompt warn threshold (10000) | `app.js` | ✅ Migrated |
-| Max turns default (2) | `settings.js` | ✅ Migrated |
-| Review thresholds in settings | `settings.js` | ✅ Migrated |
-| `<select>` options in `index.html` | All 4 selects emptied, populated by `config.js` | ✅ Migrated |
+| `review_word_threshold` default (30000) | `schemas.py`, `app/review.py` | ✅ Migrated |
+| `review_chunk_size` default (5) | `schemas.py`, `app/review.py` | ✅ Migrated |
+| `pass_score` (7) / `fail_score` (4) | Added to `config.py` `ReviewConfig`; `app/review.py` uses `REVIEW_PASS_SCORE`; `static/js/renderers.js` uses `SHARED_CONFIG?.review?.pass_score` / `fail_score` | ✅ Migrated |
+| `title_max_length` (200) | `config.py` `UISchema`; `app/validators.py` re-exports `max_title_length` | ✅ Migrated |
+| `prompt_warn_threshold` (10000) | `config.py` `UISchema`; `static/js/app.js` uses `SHARED_CONFIG?.ui?.prompt_warn_threshold` | ✅ Migrated |
+| Length → chapter/word count mapping | `app/generation.py` derives from `shared_config.lengths` | ✅ Migrated |
+| Retry/backoff values | `app/ai_client.py` uses `shared_config.client` | ✅ Migrated |
+| Polling interval (3s) | `static/js/ui.js` | ✅ Migrated (uses `SHARED_CONFIG?.ui?.polling_interval_ms ?? 3000`) |
+| Library polling interval (10s) | `static/js/ui.js` | ✅ Migrated (uses `SHARED_CONFIG?.ui?.library_polling_interval_ms ?? 10000`) |
+| Prompt warn threshold (10000) | `static/js/app.js` | ✅ Migrated |
+| Max turns default (2) | `static/js/settings.js` | ✅ Migrated |
+| Review thresholds in settings | `static/js/settings.js` | ✅ Migrated |
+| `<select>` options in `index.html` | All 4 selects emptied, populated by `static/js/config.js` | ✅ Migrated |
 
 ### 2.2 Proposed Solution: Shared Config Endpoint
 
@@ -173,8 +174,8 @@ All hardcoded values migrated to `SHARED_CONFIG`:
 |------|-------|---------|
 | `test_storage.py` | 9 | Round-trip save/load for books and config |
 | `test_api.py` | 19 | HTTP endpoint behavior (includes `TestRetryEndpoint` — 3 tests) |
-| `test_export.py` | 18 | EPUB/PDF export, markdown→HTML |
-| `test_orchestrator.py` | 18 | Parsing, matching, transitions (still uses orchestrator methods directly) |
+| `test_export.py` | 17 | EPUB/PDF export, markdown→HTML |
+| `test_orchestrator.py` | 17 | Parsing, matching, transitions (still uses orchestrator methods directly) |
 | `test_frontend.py` | 3 | CSP compliance, API path consistency |
 | `test_parsing.py` | 21 | Outline parsing (8), critique parsing (5), chapter matching (8) |
 | `test_schemas.py` | 21 | `BookCreateRequest` (9), `BookState` (6), `AIConfig` (5), schema↔config sync (1) |
@@ -261,20 +262,20 @@ The 16 identified low-value tests have been removed from `test_orchestrator.py`,
 
 **Completed:**
 
-#### `app/status.py` — Status transition management — ✅ DONE (47 lines)
+#### `app/status.py` — Status transition management — ✅ DONE (45 lines)
 Contains `VALID_TRANSITIONS`, `_transition()`, `is_terminal_status()`, `get_allowed_transitions()`.
 
-#### `app/parsing.py` — LLM response parsing — ✅ DONE (202 lines)
+#### `app/parsing.py` — LLM response parsing — ✅ DONE (270 lines)
 Contains `parse_outline()`, `parse_critique()`, `match_chapter_title()`, `_normalize_title()`. Imports `_extract_content` from `app.ai_client`.
 
-#### `app/generation.py` — Book generation pipeline — ✅ DONE (208 lines)
+#### `app/generation.py` — Book generation pipeline — ✅ DONE (223 lines)
 Contains `generate_summary()`, `generate_outline()`, `generate_chapters()`. Uses `LENGTH_CHAPTER_COUNT`/`LENGTH_WORD_COUNT` derived from shared config. Uses `_update_progress()` helper. Imports from `app.status`, `app.parsing`, `app.config`.
 
-#### `app/review.py` — Review pipeline — ✅ DONE (490 lines)
+#### `app/review.py` — Review pipeline — ✅ DONE (468 lines)
 Contains `review_book()`, `_full_review()`, `_chunked_review()`, `_build_review_text()`, `_build_revision_context()`, `_record_review_turn()`, `_get_review_thresholds()`. Uses `REVIEW_PASS_SCORE` from shared config. Imports from `app.status`, `app.parsing`, `app.generation`, `app.config`.
 
-#### `app/validators.py` — Validation helpers — ✅ DONE (47 lines)
-Contains `validate_create_request()`, `validate_book_state()`, `validate_ai_config()`, `max_title_length`.
+#### `app/validators.py` — Validation helpers — ✅ DONE (116 lines)
+Contains `validate_create_request()` (returns `List[str]`), `validate_book_state()` (returns `Dict[str, Any]` with `valid`/`errors` keys), `validate_ai_config()` (returns `List[str]`), `max_title_length`.
 
 #### `app/orchestrator.py` — Slim coordinator — ✅ DONE (152 lines)
 Delegates all logic to specialized modules. Re-exports key functions for backward compatibility with tests. Maintains same public API (`generate_summary`, `generate_outline`, `generate_chapters`, `review_book`, `validate_book`, `_parse_outline`, `_parse_critique`, `_match_chapter_title`, `_normalize_title`).
@@ -307,7 +308,7 @@ FastAPI app creation, middleware setup, router inclusion, web UI route, static f
 #### `static/js/renderers.js` — UI rendering utilities — ✅ DONE (171 lines)
 Contains `statusBadge()`, `buildBookCardHtml()`, `renderDetail()`, `buildReviewSection()`. Depends on `config.js` (SHARED_CONFIG, getStatusLabel, getStatusCssClass) and `ui.js` (esc).
 
-**Updated `static/js/ui.js`:** Kept only true utilities: `apiFetch`, `toast`, `esc`, polling functions. Removed `statusBadge()`.
+**Updated `static/js/ui.js`:** Kept only true utilities: `apiFetch`, `toast`, `esc`, progress polling (`startPolling`/`stopPolling`), library auto-refresh (`startLibraryPolling`/`stopLibraryPolling`). Removed `statusBadge()`.
 
 **Updated `static/js/app.js`:** Removed rendering functions. Kept only interaction logic (event handlers, form submission, navigation). Calls `renderDetail()` from `renderers.js`.
 
