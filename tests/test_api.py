@@ -45,6 +45,7 @@ def _isolate_api_tests(tmp_path):
     _m.server_config.reviewer_client = None
     _m.server_config.persisted = None
     _m.reviewer_client = None
+    _m.orchestrator.reviewer_client = None
 
     # Reset semaphore to allow re-creation for new event loop
     _m._generation_semaphore = None
@@ -64,6 +65,7 @@ def _isolate_api_tests(tmp_path):
     _m.server_config.reviewer_client = None
     _m.server_config.persisted = None
     _m.reviewer_client = None
+    _m.orchestrator.reviewer_client = None
 
 
 class TestHealthEndpoint:
@@ -149,6 +151,126 @@ class TestConfigEndpoints:
         assert data["endpoint_url"] == "http://test-endpoint.com"
         assert data["model_name"] == "test-model"
         assert data["api_key_set"] is True
+
+    @pytest.mark.asyncio
+    async def test_validate_config_no_endpoint(self, client):
+        """POST /api/config/validate rejects config without endpoint."""
+        resp = await client.post("/api/config/validate", json={
+            "endpoint_url": "",
+            "model_name": "gpt-4o",
+            "api_key": "test-key",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is False
+        assert data["writer_ok"] is False
+        assert "endpoint" in data["writer_error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_validate_config_no_model(self, client):
+        """POST /api/config/validate rejects config without model."""
+        resp = await client.post("/api/config/validate", json={
+            "endpoint_url": "http://localhost:8080",
+            "model_name": "",
+            "api_key": "test-key",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is False
+        assert data["writer_ok"] is False
+        assert "model" in data["writer_error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_validate_config_invalid_key(self, client):
+        """POST /api/config/validate detects invalid API key."""
+        with patch("app.routes.AIClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.list_models = AsyncMock(
+                side_effect=Exception("401: Unauthorized")
+            )
+            mock_instance.close = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            resp = await client.post("/api/config/validate", json={
+                "endpoint_url": "http://localhost:8080",
+                "model_name": "gpt-4o",
+                "api_key": "invalid-key",
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["valid"] is False
+            assert data["writer_ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_config_fallback_to_saved(self, client):
+        """POST /api/config/validate uses saved config when fields are empty."""
+        # Set up saved config
+        await client.post("/api/config", json={
+            "endpoint_url": "http://localhost:8080",
+            "model_name": "gpt-4o",
+            "api_key": "invalid-key",
+        })
+
+        with patch("app.routes.AIClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.list_models = AsyncMock(
+                side_effect=Exception("401: Unauthorized")
+            )
+            mock_instance.close = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            # Validate with empty fields — should fall back to saved config
+            resp = await client.post("/api/config/validate", json={})
+            assert resp.status_code == 200
+            data = resp.json()
+            # Should detect the invalid key from saved config
+            assert data["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_config_reviewer_separate(self, client):
+        """POST /api/config/validate checks reviewer separately when configured."""
+        with patch("app.routes.AIClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.list_models = AsyncMock(
+                side_effect=Exception("Connection error")
+            )
+            mock_instance.close = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            resp = await client.post("/api/config/validate", json={
+                "endpoint_url": "http://localhost:8080",
+                "model_name": "gpt-4o",
+                "api_key": "writer-key",
+                "reviewer_endpoint_url": "http://localhost:9090",
+                "reviewer_model_name": "reviewer-model",
+                "reviewer_api_key": "reviewer-key",
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            # Both writer and reviewer will fail since endpoints don't respond
+            assert data["writer_ok"] is False
+            assert data["reviewer_ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_config_reviewer_fallback(self, client):
+        """POST /api/config/validate uses writer config when reviewer is not separate."""
+        with patch("app.routes.AIClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.list_models = AsyncMock(
+                side_effect=Exception("Connection error")
+            )
+            mock_instance.close = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            resp = await client.post("/api/config/validate", json={
+                "endpoint_url": "http://localhost:8080",
+                "model_name": "gpt-4o",
+                "api_key": "test-key",
+            })
+            assert resp.status_code == 200
+            data = resp.json()
+            # No separate reviewer configured, so reviewer_ok mirrors writer_ok
+            assert data["reviewer_ok"] == data["writer_ok"]
 
 
 class TestModelListing:

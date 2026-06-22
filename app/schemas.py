@@ -107,3 +107,13 @@ class AIConfigResponse(BaseModel):
     review_max_turns: int
     review_word_threshold: int
     review_chunk_size: int
+
+
+class ConfigValidationResult(BaseModel):
+    """Schema for the POST /api/config/validate response."""
+    valid: bool
+    writer_ok: bool
+    reviewer_ok: bool
+    error: str = ""
+    writer_error: str = ""
+    reviewer_error: str = ""

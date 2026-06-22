@@ -21,7 +21,7 @@ from app.orchestrator import Orchestrator
 from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
 from app.exporter import export_to_epub, export_to_pdf
 from app.config import get_default_shared_config
-from app.schemas import BookState, BookCreateRequest, AIConfig, AIConfigUpdate, ModelInfo, AIConfigResponse
+from app.schemas import BookState, BookCreateRequest, AIConfig, AIConfigUpdate, ModelInfo, AIConfigResponse, ConfigValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -179,14 +179,10 @@ def create_router(
 
         # Update reviewer client — empty string means "clear this field"
         if config.reviewer_endpoint_url == "" or config.reviewer_model_name == "":
-            # User explicitly cleared reviewer config
-            if server_config.reviewer_client:
-                if config.reviewer_endpoint_url == "":
-                    server_config.reviewer_client.endpoint_url = ""
-                if config.reviewer_model_name == "":
-                    server_config.reviewer_client.model_name = ""
-                if config.reviewer_api_key == "":
-                    server_config.reviewer_client.api_key = ""
+            # User explicitly cleared reviewer config — null out the client
+            # so orchestrator falls back to the main ai_client for review tasks
+            server_config.reviewer_client = None
+            orchestrator.reviewer_client = None
         elif config.reviewer_endpoint_url is not None or config.reviewer_model_name is not None or config.reviewer_api_key is not None:
             if server_config.reviewer_client is None:
                 # Create one if it doesn't exist yet
@@ -231,6 +227,96 @@ def create_router(
 
         return {"status": "ok", "config": await get_ai_config()}
 
+    @router.post("/api/config/validate")
+    async def validate_config(config: AIConfigUpdate):
+        """
+        Validate AI configuration by testing the endpoint connectivity and credentials.
+        Returns validation results without persisting anything.
+        """
+        writer_ok = False
+        writer_error = ""
+        reviewer_ok = False
+        reviewer_error = ""
+
+        # Validate writer
+        writer_endpoint = config.endpoint_url or ai_client.endpoint_url
+        writer_key = config.api_key or ai_client.api_key
+        writer_model = config.model_name or ai_client.model_name
+
+        if not writer_endpoint:
+            writer_error = "Writer endpoint URL is required"
+        elif not writer_model:
+            writer_error = "Writer model name is required"
+        else:
+            check_endpoint(writer_endpoint)
+            temp_client = AIClient(
+                endpoint_url=writer_endpoint,
+                model_name=writer_model,
+                api_key=writer_key,
+            )
+            try:
+                models = await temp_client.list_models()
+                if models:
+                    writer_ok = True
+                else:
+                    writer_error = "No models returned — check endpoint URL and API key"
+            except Exception as e:
+                writer_error = str(e)
+            finally:
+                await temp_client.close()
+
+        # Validate reviewer (only if separate reviewer is configured)
+        r_ep = config.reviewer_endpoint_url
+        r_model = config.reviewer_model_name
+        r_key = config.reviewer_api_key
+        has_reviewer = any(v for v in [r_ep, r_model, r_key] if v)
+
+        if has_reviewer:
+            # Use reviewer endpoint if provided, otherwise writer's
+            rev_endpoint = r_ep if r_ep else writer_endpoint
+            rev_model = r_model if r_model else writer_model
+            rev_key = r_key if r_key else writer_key
+
+            if not rev_endpoint:
+                reviewer_error = "Reviewer endpoint URL is required"
+            elif not rev_model:
+                reviewer_error = "Reviewer model name is required"
+            else:
+                check_endpoint(rev_endpoint)
+                temp_client = AIClient(
+                    endpoint_url=rev_endpoint,
+                    model_name=rev_model,
+                    api_key=rev_key,
+                )
+                try:
+                    models = await temp_client.list_models()
+                    if models:
+                        reviewer_ok = True
+                    else:
+                        reviewer_error = "No models returned — check endpoint URL and API key"
+                except Exception as e:
+                    reviewer_error = str(e)
+                finally:
+                    await temp_client.close()
+        else:
+            # No separate reviewer — reviewer will use writer's config
+            reviewer_ok = writer_ok
+
+        overall_valid = writer_ok and (reviewer_ok or not has_reviewer)
+        error = ""
+        if not overall_valid:
+            errors = [e for e in [writer_error, reviewer_error] if e]
+            error = "; ".join(errors)
+
+        return ConfigValidationResult(
+            valid=overall_valid,
+            writer_ok=writer_ok,
+            reviewer_ok=reviewer_ok,
+            error=error,
+            writer_error=writer_error,
+            reviewer_error=reviewer_error,
+        )
+
     # ── Model Listing ───────────────────────────────────────────────────
 
     @router.get("/api/models")
@@ -272,7 +358,7 @@ def create_router(
         Accepts optional endpoint_url/api_key query params for setup wizard.
         """
         # No reviewer client configured and no endpoint param → uses writer's
-        if reviewer_client is None and not endpoint_url:
+        if server_config.reviewer_client is None and not endpoint_url:
             return {"models": [], "current_model": "", "uses_writer": True}
 
         # Setup wizard: make a direct request without modifying client state
@@ -291,15 +377,28 @@ def create_router(
                 raise HTTPException(status_code=502, detail=f"Failed to fetch models: {str(e)}")
 
         # Normal path: use existing reviewer client
-        if reviewer_client is None:
+        rc = server_config.reviewer_client
+        if rc is None:
             return {"models": [], "current_model": "", "uses_writer": True}
-        if not reviewer_client.endpoint_url:
-            raise HTTPException(
-                status_code=400,
-                detail="Reviewer endpoint URL is required. Set it first.",
-            )
-        models = await reviewer_client.list_models()
-        return {"models": models, "current_model": reviewer_client.model_name or "", "uses_writer": False}
+
+        # If reviewer has no effective API key (and main client also has none),
+        # use the query param key if provided, otherwise defer to writer
+        if not rc.api_key:
+            if api_key:
+                url = _build_api_url(rc.endpoint_url, "models")
+                headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+                try:
+                    response = await ai_client._client.get(url, headers=headers)
+                    response.raise_for_status()
+                    models = _parse_models_response(response.json())
+                    return {"models": models, "current_model": rc.model_name or "", "uses_writer": False}
+                except Exception as e:
+                    raise HTTPException(status_code=502, detail=f"Failed to fetch models: {str(e)}")
+            # No key available — signal frontend to use writer endpoint instead
+            return {"models": [], "current_model": "", "uses_writer": True}
+
+        models = await rc.list_models()
+        return {"models": models, "current_model": rc.model_name or "", "uses_writer": False}
 
     # ── Book Endpoints ──────────────────────────────────────────────────
 

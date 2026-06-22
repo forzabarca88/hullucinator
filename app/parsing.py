@@ -15,6 +15,54 @@ from app.ai_client import _extract_content
 logger = logging.getLogger(__name__)
 
 
+def _extract_balanced_json(text: str) -> Optional[str]:
+    """Extract a balanced JSON object or array from text.
+
+    Finds the first '{' or '[' and matches it with its corresponding
+    closing bracket, handling nested structures. Returns None if no
+    valid JSON is found.
+    """
+    # Look for the start of a JSON object or array
+    start = None
+    for i, ch in enumerate(text):
+        if ch in ('{', '['):
+            start = i
+            break
+    if start is None:
+        return None
+
+    # Walk through text, tracking bracket depth
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\':
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            depth += 1
+        elif ch in ('}', ']'):
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i + 1]
+                # Verify it parses as valid JSON
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
     """
     Parse outline from LLM response, handling JSON, code fences, and
@@ -34,7 +82,7 @@ def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
         logger.warning("Empty outline response, using default chapters")
         return list(default_chapters)
 
-    # Clean up markdown code blocks (standalone ```)
+    # Clean up markdown code blocks (standalone ```) 
     clean = content.strip()
     if clean.startswith("```"):
         parts = clean.split("```")
@@ -47,18 +95,14 @@ def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
         clean = clean.strip()
 
     # Try to extract JSON from code fences
+    json_str = None
     json_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", content, re.DOTALL)
     if json_match:
         json_str = json_match.group(1).strip()
     else:
-        # Try to find JSON object in text
-        json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            # Try to find JSON array in text
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            json_str = json_match.group(0) if json_match else None
+        # Try to find a top-level JSON object — use a balanced-brace approach
+        # to avoid the greedy \{.*\} matching across multiple JSON blocks
+        json_str = _extract_balanced_json(content)
 
     # Try JSON parsing
     if json_str:
@@ -87,6 +131,11 @@ def parse_outline(raw: str, default_chapters: List[str]) -> List[str]:
 
         # Skip markdown code fence markers
         if clean_line.startswith("```"):
+            continue
+
+        # Skip lines that look like raw JSON fragments (e.g. '"chapters": [')
+        # These are artifacts from failed JSON parsing, not real chapter titles
+        if re.match(r'^\s*["\{\[]', clean_line):
             continue
 
         # Detect various list markers
@@ -145,18 +194,13 @@ def parse_critique(raw: str) -> Dict[str, Any]:
         return {"issues": [], "overall_score": 5, "verdict": "ready"}
 
     # Try to extract JSON from code fences
+    json_str = None
     json_match = re.search(r"```(?:json)?\s*\n(.*?)\n```", content, re.DOTALL)
     if json_match:
         json_str = json_match.group(1).strip()
     else:
-        # Try to find JSON object in text
-        json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            # Try to find JSON array in text
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            json_str = json_match.group(0) if json_match else None
+        # Use balanced-brace extraction to avoid greedy matching
+        json_str = _extract_balanced_json(content)
 
     # Try JSON parsing
     if json_str:

@@ -7,7 +7,7 @@ enforces valid status transitions.
 import logging
 from typing import Dict, Any
 
-from app.ai_client import AIClient, _extract_content
+from app.ai_client import AIClient, _extract_content, _unwrap_json_content
 from app.storage import save_book
 from app.schemas import BookState
 from app.status import _transition, is_terminal_status
@@ -19,6 +19,36 @@ logger = logging.getLogger(__name__)
 # Shared config — single source of truth
 _shared_config = get_default_shared_config()
 
+def _unwrap_json_content(text: str) -> str:
+    """If text looks like JSON wrapping plain content, extract the inner text.
+    
+    Returns the original text if it's not valid JSON or doesn't contain
+    a recognizable content wrapper.
+    """
+    import json
+    # Try parsing as JSON
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return "\n".join(str(item) for item in data).strip()
+    if isinstance(data, dict):
+        # Check common keys for wrapped content
+        for key in ("content", "text", "body", "response", "output"):
+            if key in data:
+                return str(data[key]).strip()
+        # "chapters" key means the LLM returned JSON when asked for plain text
+        if "chapters" in data and isinstance(data["chapters"], list):
+            return "\n\n".join(str(c) for c in data["chapters"]).strip()
+        # Last resort: serialize the whole dict back
+        return json.dumps(data, indent=2)
+    return text
+
+
 # Length-to-chapter-count guidance (derived from shared config)
 LENGTH_CHAPTER_COUNT: dict[str, str] = {
     l.key: l.chapter_range for l in _shared_config.lengths
@@ -28,6 +58,35 @@ LENGTH_CHAPTER_COUNT: dict[str, str] = {
 LENGTH_WORD_COUNT: dict[str, str] = {
     l.key: l.word_range for l in _shared_config.lengths
 }
+
+
+def _format_chapter_guidance(chapter_range: str) -> str:
+    """Convert chapter range to explicit constraint language for LLM prompts.
+
+    '1' -> 'exactly 1 chapter'
+    '3-5' -> 'between 3 and 5 chapters'
+    '8-15' -> 'between 8 and 15 chapters'
+    '15-25' -> 'between 15 and 25 chapters'
+    """
+    if '-' not in chapter_range:
+        return f"exactly {chapter_range} chapter" if chapter_range == "1" else f"exactly {chapter_range} chapters"
+    parts = chapter_range.split('-')
+    return f"between {parts[0]} and {parts[1]} chapters"
+
+
+def _parse_chapter_range(chapter_range: str) -> tuple:
+    """Parse a chapter range string into (min_chapters, max_chapters).
+
+    '1' -> (1, 1)
+    '3-5' -> (3, 5)
+    '8-15' -> (8, 15)
+    '15-25' -> (15, 25)
+    """
+    if '-' not in chapter_range:
+        n = int(chapter_range)
+        return n, n
+    parts = chapter_range.split('-')
+    return int(parts[0]), int(parts[1])
 
 
 def _update_progress(book: BookState, current_step: str, percentage: int = 0,
@@ -81,23 +140,29 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
         raise ValueError(f"Cannot generate outline: book is '{book.status}', expected 'summary_generated'")
 
     tags_str = ", ".join(book.tags) if book.tags else "no specific genre"
-    chapter_guidance = LENGTH_CHAPTER_COUNT.get(book.length, "8-15")
+    chapter_range = LENGTH_CHAPTER_COUNT.get(book.length, "8-15")
+    chapter_guidance = _format_chapter_guidance(chapter_range)
     word_guidance = LENGTH_WORD_COUNT.get(book.length, "20,000-50,000")
 
     messages = [
         {"role": "system", "content": (
             f"You are a creative writing assistant. Generate a chapter outline for a {book.length} "
-            f"({word_guidance} words) in the {tags_str} genre."
+            f"({word_guidance} words) in the {tags_str} genre. "
+            f"The book must have {chapter_guidance}."
         )},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
             f"Genre/Tags: {tags_str}\n"
             f"Book length: {book.length}\n"
-            f"Target chapters: {chapter_guidance}\n"
+            f"Number of chapters: {chapter_guidance}\n"
             f"Target word count: {word_guidance}\n\n"
             f"Summary:\n{book.summary}\n\n"
-            f"Generate a chapter-by-chapter outline. Return as JSON with this exact structure:\n"
-            f'{{"chapters": ["Chapter 1: Title", "Chapter 2: Title", ...]}}\n\n'
+            f"Generate a chapter-by-chapter outline as a numbered list. "
+            f"Return ONLY the list, one chapter per line, in this format:\n"
+            f"1. Chapter Title One\n"
+            f"2. Chapter Title Two\n\n"
+            f"IMPORTANT: The outline must contain {chapter_guidance}. Do not add extra chapters. "
+            f"Do NOT wrap the output in JSON. Do NOT include any explanatory text. "
             f"Each chapter title should be descriptive and indicate the main focus of that chapter. "
             f"The outline should show a clear narrative arc from beginning to end."
         )},
@@ -108,6 +173,14 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
 
     response = await ai_client.generate_completion(messages, temperature=0.7)
     outline_chapters = parse_outline(response, [])
+
+    # Enforce chapter count to match the length tier
+    min_chapters, max_chapters = _parse_chapter_range(chapter_range)
+    if len(outline_chapters) > max_chapters:
+        logger.warning("Outline for '%s' has %d chapters but %s allows max %d — trimming", book.title, len(outline_chapters), book.length, max_chapters)
+        outline_chapters = outline_chapters[:max_chapters]
+    elif len(outline_chapters) < min_chapters:
+        logger.warning("Outline for '%s' has %d chapters but %s requires min %d", book.title, len(outline_chapters), book.length, min_chapters)
 
     # Store outline as list (matching BookState schema)
     book.outline = outline_chapters
@@ -161,7 +234,8 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
         messages = [
             {"role": "system", "content": (
                 f"You are a creative writing assistant. Write chapter {chapter_num} of a {book.length} "
-                f"in the {tags_str} genre. Target {word_guidance} words for the full book."
+                f"in the {tags_str} genre. Target {word_guidance} words for the full book. "
+                f"Return ONLY plain text narrative — do NOT wrap output in JSON or code blocks."
             )},
             {"role": "user", "content": (
                 "".join(context_parts) +
@@ -169,7 +243,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
                 f"Continue the story naturally from the previous chapters. "
                 f"Maintain consistent tone, character voices, and narrative pacing. "
                 f"Target word count for this chapter: {word_guidance}.\n\n"
-                f"Return ONLY the chapter content, starting directly with the narrative text."
+                f"Return ONLY the chapter content as plain text, starting directly with the narrative."
             )},
         ]
 
@@ -179,6 +253,8 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
 
         response = await ai_client.generate_completion(messages, temperature=0.8)
         chapter_content = _extract_content(response)
+        # Unwrap JSON if the LLM returned JSON despite being asked for plain text
+        chapter_content = _unwrap_json_content(chapter_content)
 
         if not chapter_content or len(chapter_content.strip()) < 100:
             raise ValueError(f"Chapter '{title}' generation produced insufficient content")
@@ -195,6 +271,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
         logger.info("Chapter %d/%d '%s' generated (%d chars)",
                      chapter_num, total, title, len(chapter_content))
 
+    _transition(book, "completed")
     _update_progress(book, "All chapters generated", total_chapters=total, chapters_completed=total, percentage=70)
     save_book(book.id, book)
 

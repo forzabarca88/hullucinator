@@ -47,7 +47,7 @@ Open http://localhost:8000 in your browser to use the web interface. On first la
 .venv/bin/pytest --cov=app --cov=tests -x -q
 ```
 
-The test suite includes 126 tests across 9 test files covering backend logic, API endpoints, parsing, schemas, config, concurrency, export, storage, and frontend integrity.
+The test suite includes 175 tests across 10 test files covering backend logic, API endpoints, AI client, parsing, schemas, config, concurrency, export, storage, and frontend integrity.
 
 ## Web Interface
 

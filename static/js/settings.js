@@ -114,6 +114,19 @@ async function saveConfig() {
       review_word_threshold: parseInt($('cfgWordThreshold')?.value) ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000,
       review_chunk_size: parseInt($('cfgChunkSize')?.value) || 5,
     };
+
+    // Validate credentials before saving
+    toast('Testing credentials...', 'info');
+    const saveBtn = $('saveConfigBtn');
+    saveBtn.disabled = true;
+
+    const valid = await validateConfig(cfg);
+    if (!valid.valid) {
+      toast('Cannot save: ' + valid.error, 'error');
+      saveBtn.disabled = false;
+      return;
+    }
+
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
     toast('Configuration saved!', 'success');
     closeSettings();
@@ -121,8 +134,22 @@ async function saveConfig() {
     appConfigured = res.config.configured;
     // Sync create form's Max Review Turns with saved config
     if ($('maxTurns')) $('maxTurns').value = res.config.review_max_turns || 2;
+    saveBtn.disabled = false;
   } catch (err) {
     toast('Save error: ' + err.message, 'error');
+    const saveBtn = $('saveConfigBtn');
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+/* ── Config Validation ─────────────────────────────────────────── */
+
+async function validateConfig(cfg) {
+  try {
+    const res = await apiFetch('/config/validate', { method: 'POST', body: JSON.stringify(cfg) });
+    return res;
+  } catch (err) {
+    return { valid: false, writer_ok: false, reviewer_ok: false, error: err.message };
   }
 }
 
@@ -156,6 +183,18 @@ async function saveSetupConfig() {
     review_chunk_size: parseInt($('setupChunkSize')?.value) || 5,
   };
 
+  // Validate credentials before saving
+  toast('Testing credentials...', 'info');
+  const saveBtn = $('setupSaveBtn');
+  saveBtn.disabled = true;
+
+  const valid = await validateConfig(cfg);
+  if (!valid.valid) {
+    toast('Cannot save: ' + valid.error, 'error');
+    saveBtn.disabled = false;
+    return;
+  }
+
   try {
     const res = await apiFetch('/config', { method: 'POST', body: JSON.stringify(cfg) });
     toast('Configuration saved! You can now generate books.', 'success');
@@ -178,8 +217,10 @@ async function saveSetupConfig() {
 
     // Load existing books
     loadBooks();
+    saveBtn.disabled = false;
   } catch (err) {
     toast('Save error: ' + err.message, 'error');
+    saveBtn.disabled = false;
   }
 }
 
@@ -226,7 +267,13 @@ async function fetchModels(role, inputId) {
 
     if (ep) {
       fetchUrl += '?endpoint_url=' + encodeURIComponent(ep);
-      if (apiKey) fetchUrl += '&api_key=' + encodeURIComponent(apiKey);
+      if (apiKey) {
+        fetchUrl += '&api_key=' + encodeURIComponent(apiKey);
+      } else if (role === 'reviewer') {
+        // Reviewer has no API key — pass writer's key so fetch works before Save
+        const writerKey = $('cfgApiKey') ? $('cfgApiKey').value.trim() : null;
+        if (writerKey) fetchUrl += '&api_key=' + encodeURIComponent(writerKey);
+      }
     } else if (role === 'reviewer') {
       // No reviewer endpoint set — fall back to writer's endpoint
       const writerEp = $('cfgEndpoint') ? $('cfgEndpoint').value.trim() : null;
