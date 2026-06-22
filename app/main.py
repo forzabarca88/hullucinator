@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException
 from starlette.staticfiles import StaticFiles
+
+from app.logging import log_error_with_trace
 from app.middleware import setup_middleware
 from app.routes import create_router
 from app.schemas import AIConfig
@@ -151,6 +153,10 @@ async def _check_configured_and_connected():
     except HTTPException:
         raise
     except Exception as e:
+        log_error_with_trace(
+            "API credential verification failed: %s", e,
+            exc=e, logger_obj=logger,
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Failed to verify API credentials: {e}. Please check your endpoint URL and API key in Settings.",

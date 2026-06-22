@@ -612,3 +612,52 @@ class TestRetryEndpoint:
             assert new_book["review_max_turns"] == 5
             assert new_book["skip_review"] is True
             assert new_book["status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_retry_completed_book(self, client):
+        """Retry works for completed books, not just failed ones."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book
+            resp = await client.post("/api/books/create", json={
+                "title": "Completed Retry Test",
+                "prompt": "A book to retry after completion",
+                "tags": ["fantasy"],
+                "length": "novel",
+                "review_max_turns": 2,
+            })
+            assert resp.status_code == 200
+            old_book = resp.json()
+            old_id = old_book["book_id"]
+
+            # Simulate the book reaching completed status
+            resp = await client.get(f"/api/books/{old_id}")
+            book = resp.json()
+            book["status"] = "completed"
+
+            # Retry the completed book
+            resp = await client.post(f"/api/books/{old_id}/retry")
+            assert resp.status_code == 200
+            retry_response = resp.json()
+            new_book_id = retry_response["book_id"]
+            assert new_book_id != old_id
+            assert retry_response["status"] == "pending"
+
+            # New book has same content
+            resp = await client.get(f"/api/books/{new_book_id}")
+            assert resp.status_code == 200
+            new_book = resp.json()
+            assert new_book["title"] == "Completed Retry Test"
+            assert new_book["prompt"] == "A book to retry after completion"
+            assert new_book["tags"] == ["fantasy"]
+            assert new_book["status"] == "pending"
+
+            # Old book is deleted
+            resp = await client.get(f"/api/books/{old_id}")
+            assert resp.status_code == 404

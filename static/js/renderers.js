@@ -104,7 +104,7 @@ function renderDetail(book) {
   if (book.status === 'completed') {
     html += `<button class="btn btn-secondary btn-sm" data-action="review">Trigger Review</button>`;
   }
-  if (book.status === 'failed') {
+  if (book.status === 'failed' || book.status === 'completed' || book.status === 'reviewed') {
     html += `<button class="btn btn-secondary btn-sm" data-action="retry">Retry</button>`;
   }
   html += `<button class="btn btn-secondary btn-sm" data-action="delete" style="color:var(--status-error);border-color:var(--status-error)">Delete</button>`;

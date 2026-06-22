@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from app.ai_client import AIClient, ReviewerClient, _extract_content
+from app.logging import log_error_with_trace
 from app.storage import save_book, load_config
 from app.schemas import BookState
 from app.status import _transition
@@ -186,7 +187,7 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
         # Step 1: Professional critique (using reviewer client)
         critique_messages = [
             {"role": "system", "content": (
-                _gen_config.critique_system_prompt.format(pass_score=REVIEW_PASS_SCORE)
+                _gen_config.critique_system_prompt.replace("{pass_score}", str(REVIEW_PASS_SCORE))
             )},
             {"role": "user", "content": review_text},
         ]
@@ -200,10 +201,17 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
         overall_score = critique_data.get("overall_score", 5)
         verdict = critique_data.get("verdict", "needs_revision")
 
+        # Log issue summary for visibility
+        if issues:
+            issue_summary = ", ".join(
+                f"{i.get('type', '?')}: {i.get('chapter', '?')}" for i in issues
+            )
+            logger.info("Turn %d: Review found %d issues (score %d/10): %s",
+                        turn_num, len(issues), overall_score, issue_summary)
+
         # Step 2: If issues found, correct them (using writer client)
         corrections = []
         if verdict == "needs_revision" and issues:
-            logger.info("Turn %d: Review found %d issues to correct", turn_num, len(issues))
             corrected_chapters = set()
 
             for issue in issues:
@@ -213,8 +221,13 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
                     matched = match_chapter_title(chapter_title, book.chapters)
                     if matched:
                         chapter_title = matched
+                        logger.info("Matched issue chapter '%s' → '%s'", issue.get("chapter", ""), matched)
                     else:
-                        logger.warning("Could not match issue chapter '%s' to any generated chapter", chapter_title)
+                        available = ", ".join(book.chapters.keys())
+                        logger.warning(
+                            "Could not match issue chapter '%s' to any generated chapter. Available: %s",
+                            chapter_title, available
+                        )
                         continue
 
                 if chapter_title in corrected_chapters:
@@ -237,8 +250,14 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
                     )},
                 ]
 
+                # Capture original word count before replacement
+                original_content = book.chapters[chapter_title]
+                original_words = len(original_content.split())
+
                 revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
+                revised_words = len(revised_content.split())
+                delta = revised_words - original_words
 
                 # Update chapter and regenerate its summary
                 book.chapters[chapter_title] = revised_content
@@ -246,18 +265,37 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
                 book.chapter_summaries[chapter_title] = new_summary
                 corrected_chapters.add(chapter_title)
 
+                # Log correction detail with word count delta
+                logger.info(
+                    "  Corrected '%s': %s (words: %d → %d, delta: %s%d)",
+                    chapter_title,
+                    issue.get("type", "general"),
+                    original_words,
+                    revised_words,
+                    "+" if delta >= 0 else "",
+                    delta
+                )
+
                 corrections.append({
                     "chapter": chapter_title,
                     "issue_type": issue.get("type", "general"),
                     "issue_description": description,
                     "suggestion": suggestion,
                     "corrected": True,
+                    "words_before": original_words,
+                    "words_after": revised_words,
                 })
 
                 # Save after each correction
                 save_book(book.id, book)
 
-            logger.info("Turn %d: Completed %d corrections", turn_num, len(corrected_chapters))
+            # Log skipped issues (duplicates or unmatched)
+            skipped = len(issues) - len(corrected_chapters)
+            if skipped > 0:
+                logger.info("Turn %d: %d issue(s) skipped (duplicate chapter or unmatched)", turn_num, skipped)
+            logger.info("Turn %d: Completed %d corrections for chapters: %s",
+                        turn_num, len(corrected_chapters),
+                        ", ".join(corrected_chapters))
         else:
             logger.info("Turn %d: Book passed review (score: %d/10)", turn_num, overall_score)
 
@@ -349,8 +387,17 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
 
             turn_scores.append(chunk_score)
 
-            logger.info("Chunk %d/%d: score=%d, verdict=%s, %d issues",
-                       chunk_idx + 1, len(chunks), chunk_score, chunk_verdict, len(chunk_issues))
+            # Log issue summary for visibility
+            if chunk_issues:
+                issue_summary = ", ".join(
+                    f"{i.get('type', '?')}: {i.get('chapter', '?')}" for i in chunk_issues
+                )
+                logger.info("Chunk %d/%d: score=%d, verdict=%s, %d issues: %s",
+                           chunk_idx + 1, len(chunks), chunk_score, chunk_verdict,
+                           len(chunk_issues), issue_summary)
+            else:
+                logger.info("Chunk %d/%d: score=%d, verdict=%s, 0 issues",
+                           chunk_idx + 1, len(chunks), chunk_score, chunk_verdict)
 
             # Filter issues to only include chapters in this chunk
             for issue in chunk_issues:
@@ -361,7 +408,14 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                         matched = match_chapter_title(chapter_title, book.chapters)
                         if matched:
                             issue["chapter"] = matched
+                            logger.info("  Matched issue chapter '%s' → '%s'",
+                                       issue.get("chapter", ""), matched)
                         else:
+                            available = ", ".join(book.chapters.keys())
+                            logger.warning(
+                                "  Could not match issue chapter '%s' to any generated chapter. Available: %s",
+                                chapter_title, available
+                            )
                             continue
                 turn_issues.append(issue)
 
@@ -391,13 +445,30 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                     )},
                 ]
 
+                # Capture original word count before replacement
+                original_content = book.chapters[chapter_title]
+                original_words = len(original_content.split())
+
                 revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
+                revised_words = len(revised_content.split())
+                delta = revised_words - original_words
 
                 book.chapters[chapter_title] = revised_content
                 new_summary = await _summarize_chapter(ai_client, revised_content, chapter_title)
                 book.chapter_summaries[chapter_title] = new_summary
                 corrected_chapters.add(chapter_title)
+
+                # Log correction detail with word count delta
+                logger.info(
+                    "  Corrected '%s': %s (words: %d → %d, delta: %s%d)",
+                    chapter_title,
+                    issue.get("type", "general"),
+                    original_words,
+                    revised_words,
+                    "+" if delta >= 0 else "",
+                    delta
+                )
 
                 turn_corrections.append({
                     "chapter": chapter_title,
@@ -405,6 +476,8 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                     "issue_description": description,
                     "suggestion": suggestion,
                     "corrected": True,
+                    "words_before": original_words,
+                    "words_after": revised_words,
                 })
                 save_book(book.id, book)
 
@@ -422,8 +495,10 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
             "corrections": turn_corrections,
         })
 
-        logger.info("Turn %d complete: avg_score=%d, verdict=%s, %d corrections",
-                    turn_num, avg_score, overall_verdict, len(turn_corrections))
+        corrected_titles = {c["chapter"] for c in turn_corrections}
+        logger.info("Turn %d complete: avg_score=%d, verdict=%s, %d corrections for chapters: %s",
+                    turn_num, avg_score, overall_verdict, len(turn_corrections),
+                    ", ".join(corrected_titles))
 
         # If all chunks pass review, we're done
         if overall_verdict == "ready" or not turn_issues:

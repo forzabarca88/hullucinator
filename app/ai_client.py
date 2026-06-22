@@ -18,6 +18,8 @@ from typing import List, Dict, Optional, Any
 
 import httpx
 
+from app.logging import log_error_with_trace
+
 from app.config import get_default_shared_config
 
 logger = logging.getLogger(__name__)
@@ -160,9 +162,12 @@ async def _retry_request(
                 logger.warning("[%s] Error, retrying in %.1fs...", log_prefix, wait)
                 await asyncio.sleep(wait)
                 continue
+            log_error_with_trace("[%s] Final attempt failed: %s", log_prefix, last_error, exc=last_error, logger_obj=logger)
             raise last_error
 
-    raise last_error or Exception(f"{log_prefix} max retries exceeded")
+    final_error = last_error or Exception(f"{log_prefix} max retries exceeded")
+    log_error_with_trace("[%s] Max retries exceeded: %s", log_prefix, final_error, exc=final_error, logger_obj=logger)
+    raise final_error
 
 
 class AIClient:
@@ -250,7 +255,7 @@ class AIClient:
             logger.warning("Model listing failed (HTTP %d): %s", e.response.status_code, e.response.text)
             return []
         except Exception as e:
-            logger.warning("Model listing failed: %s", e)
+            log_error_with_trace("Model listing failed: %s", e, exc=e, logger_obj=logger)
             return []
 
     async def generate_completion(
@@ -404,7 +409,7 @@ class ReviewerClient:
             logger.warning("Reviewer model listing failed (HTTP %d): %s", e.response.status_code, e.response.text)
             return []
         except Exception as e:
-            logger.warning("Reviewer model listing failed: %s", e)
+            log_error_with_trace("Reviewer model listing failed: %s", e, exc=e, logger_obj=logger)
             return []
 
     async def generate_completion(

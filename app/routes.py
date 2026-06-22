@@ -21,6 +21,7 @@ from app.orchestrator import Orchestrator
 from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
 from app.exporter import export_to_epub, export_to_pdf
 from app.config import get_default_shared_config
+from app.logging import log_error_with_trace
 from app.schemas import BookState, BookCreateRequest, AIConfig, AIConfigUpdate, ModelInfo, AIConfigResponse, ConfigValidationResult
 
 logger = logging.getLogger(__name__)
@@ -75,9 +76,12 @@ async def _run_generation_pipeline(book_id: str, orchestrator, save_book):
             logger.info("Book '%s' (%s) generation completed (review skipped)", book_state.title, book_id)
 
     except Exception as e:
-        logger.error("Book '%s' (%s) generation failed: %s", book_state.title, book_id, e)
+        tb = log_error_with_trace(
+            "Book '%s' (%s) generation failed: %s", book_state.title, book_id, e,
+            exc=e, logger_obj=logger,
+        )
         book_state.status = "failed"
-        book_state.metadata = {"error": str(e)}
+        book_state.metadata = {"error": str(e), "traceback": tb}
         book_state.progress["current_step"] = "failed"
         book_state.progress["error"] = str(e)
         save_book(book_id, book_state)
@@ -516,11 +520,14 @@ def create_router(
                     await orchestrator.review_book(book, max_turns=book.review_max_turns)
                     logger.info("Iterative review completed for '%s' (%s)", book.title, book_id)
                 except Exception as e:
-                    logger.error("Review failed for book %s: %s", book_id, e)
+                    tb = log_error_with_trace(
+                        "Review failed for book %s: %s", book_id, e,
+                        exc=e, logger_obj=logger,
+                    )
                     book = load_book(book_id)
                     if book:
                         book.status = "failed"
-                        book.metadata = {"error": str(e)}
+                        book.metadata = {"error": str(e), "traceback": tb}
                         book.progress["current_step"] = "review_failed"
                         book.progress["error"] = str(e)
                         save_book(book_id, book)
@@ -568,19 +575,23 @@ def create_router(
             else:
                 raise HTTPException(status_code=400, detail=f"Invalid format '{fmt}'. Use 'epub' or 'pdf'.")
         except Exception as e:
-            logger.error("Export failed for book %s: %s", book_id, e)
+            log_error_with_trace(
+                "Export failed for book %s: %s", book_id, e,
+                exc=e, logger_obj=logger,
+            )
             raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
     # ── Retry Book ──────────────────────────────────────────────────────
 
     @router.post("/api/books/{book_id}/retry")
     async def retry_book_endpoint(book_id: str, background_tasks: BackgroundTasks):
-        """Retry a failed book by creating a new one with the same parameters.
+        """Retry a book by creating a new one with the same parameters.
 
+        Works for any terminal status (failed, completed, reviewed).
         Validates API credentials (endpoint + model + key) with a live test
         request before queuing, to avoid accepting retries that will fail immediately.
 
-        Loads the failed book's fields, constructs a new BookCreateRequest,
+        Loads the book's fields, constructs a new BookCreateRequest,
         queues generation in the background, and deletes the old book.
         """
         await check_configured_and_connected()

@@ -10,6 +10,8 @@ import html as html_lib
 import logging
 from pathlib import Path
 
+from app.logging import log_error_with_trace
+
 import ebooklib
 from ebooklib import epub
 from fpdf import FPDF, XPos, YPos
@@ -363,7 +365,10 @@ def export_to_pdf(
         pdf.add_font("PlexMono", "B", FONT_PATHS["PlexMono-Bold"])
         fonts_registered = True
     except Exception as e:
-        logger.error("Font registration failed: %s. Falling back to built-in fonts.", e)
+        log_error_with_trace(
+            "Font registration failed: %s. Falling back to built-in fonts.", e,
+            exc=e, logger_obj=logger,
+        )
 
     # Use appropriate font family name
     font_family = "Playfair" if fonts_registered else "Times"
