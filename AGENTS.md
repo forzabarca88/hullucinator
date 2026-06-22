@@ -28,6 +28,18 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 - Async tests use `asyncio_mode = "auto"` (configured in `pyproject.toml`).
 - When adding tests that write to disk or modify shared state, use appropriate isolation fixtures.
 
+## Shared Configuration
+
+**All tunable parameters flow from `app/config.py`.** This includes temperatures, system prompts, validation thresholds, concurrency limits, and UI settings. Never hardcode values in other modules — always reference the shared config. The frontend reads the same config via `GET /api/config-schema` to stay in sync.
+
+Config sub-models:
+- `GenerationConfig` — temperatures, system prompts, min chapter chars
+- `ReviewConfig` — max turns, pass/fail scores, word thresholds, chunk size
+- `ClientConfig` — retry counts, timeouts, jitter
+- `ConcurrencyConfig` — max simultaneous generations
+- `ValidationConfig` — validation thresholds
+- `UISchema` — polling intervals, input limits
+
 ## Extending the System
 
 - **New generation steps:** Add to the appropriate module. Add allowed transitions to the status module. Add a wrapping method to the orchestrator for status transitions and persistence.

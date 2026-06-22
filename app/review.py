@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Shared config — single source of truth
 _shared_config = get_default_shared_config()
+_gen_config = _shared_config.generation
 
 # Review thresholds from shared config
 REVIEW_PASS_SCORE = _shared_config.review.pass_score
@@ -100,11 +101,7 @@ def _build_revision_context(book: BookState, chapter_title: str) -> tuple:
         if prior_parts:
             prior_context = "\nPrior chapter summaries:\n" + "\n".join(prior_parts)
 
-    system_prompt = (
-        "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
-        "the specific issues identified while preserving the core narrative and style. "
-        "Ensure consistency with the rest of the book."
-    )
+    system_prompt = _gen_config.revision_system_prompt
     user_prompt = (
         f"Book: {book.title}\nGenre: {tags_str}\n\n"
         f"Book summary:\n{book.summary}\n\n"
@@ -189,23 +186,12 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
         # Step 1: Professional critique (using reviewer client)
         critique_messages = [
             {"role": "system", "content": (
-                "You are a professional book critic and editor with decades of experience. "
-                "Review the following book critically. Identify any major issues including:\n"
-                "- Plot holes or logical inconsistencies\n"
-                "- Character inconsistencies (voice, motivation, development)\n"
-                "- Pacing problems (rushed sections, dragging sections)\n"
-                "- Continuity errors (events that contradict earlier chapters)\n"
-                "- Tone or style inconsistencies across chapters\n"
-                "- Unresolved plot threads or unsatisfying endings\n\n"
-                "Return your review as a JSON object with this exact structure:\n"
-                '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
-                f"Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
-                f"If the book is solid (score >= {REVIEW_PASS_SCORE}), set verdict to 'ready' with an empty issues array."
+                _gen_config.critique_system_prompt.format(pass_score=REVIEW_PASS_SCORE)
             )},
             {"role": "user", "content": review_text},
         ]
 
-        critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
+        critique_response = await reviewer.generate_completion(critique_messages, temperature=_gen_config.critique_temperature)
         critique_raw = _extract_content(critique_response)
 
         # Parse critique response
@@ -251,7 +237,7 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
                     )},
                 ]
 
-                revision_response = await ai_client.generate_completion(revision_messages, temperature=0.7)
+                revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
 
                 # Update chapter and regenerate its summary
@@ -349,18 +335,11 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
 
             # Critique this chunk
             critique_messages = [
-                {"role": "system", "content": (
-                    "You are a professional book critic and editor. Review the following chapters critically. "
-                    "Identify any major issues including plot holes, character inconsistencies, pacing problems, "
-                    "continuity errors, tone inconsistencies, and unresolved threads.\n\n"
-                    "Return your review as a JSON object with this exact structure:\n"
-                    '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
-                    "Only flag issues in the chapters provided above. Score based on these chapters but consider overall book quality."
-                )},
+                {"role": "system", "content": _gen_config.critique_chunk_system_prompt},
                 {"role": "user", "content": review_text},
             ]
 
-            critique_response = await reviewer.generate_completion(critique_messages, temperature=0.3)
+            critique_response = await reviewer.generate_completion(critique_messages, temperature=_gen_config.critique_temperature)
             critique_raw = _extract_content(critique_response)
 
             critique_data = parse_critique(critique_raw)
@@ -412,7 +391,7 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                     )},
                 ]
 
-                revision_response = await ai_client.generate_completion(revision_messages, temperature=0.7)
+                revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
 
                 book.chapters[chapter_title] = revised_content

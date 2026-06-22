@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 # Shared config for validation constraints
 _config = get_default_shared_config()
+_validation_config = _config.validation
+
+# Re-export max_title_length for frontend use
+max_title_length = _config.ui.title_max_length
 
 
 def validate_create_request(req: BookCreateRequest) -> List[str]:
@@ -21,7 +25,7 @@ def validate_create_request(req: BookCreateRequest) -> List[str]:
 
     if not req.title or not req.title.strip():
         errors.append("Title is required and cannot be empty.")
-    elif len(req.title) > _config.ui.title_max_length:
+    elif len(req.title) > max_title_length:
         errors.append(f"Title must be {max_title_length} characters or fewer.")
 
     if not req.prompt or not req.prompt.strip():
@@ -78,7 +82,7 @@ def validate_book_state(book: BookState) -> Dict[str, Any]:
         for title, content in book.chapters.items():
             if not content or not content.strip():
                 errors.append(f"Chapter '{title}' has empty content.")
-            elif len(content) < 200:
+            elif len(content) < _validation_config.min_chapter_chars:
                 errors.append(f"Chapter '{title}' is too short ({len(content)} chars).")
 
     return {"valid": len(errors) == 0, "errors": errors}
@@ -103,14 +107,13 @@ def validate_ai_config(cfg: AIConfig) -> List[str]:
     if cfg.review_max_turns < _config.review.max_turns_min or cfg.review_max_turns > _config.review.max_turns_max:
         errors.append(f"Max turns must be between {_config.review.max_turns_min} and {_config.review.max_turns_max}.")
 
-    if cfg.review_word_threshold < 1000:
-        errors.append("Word threshold must be at least 1,000.")
+    if cfg.review_word_threshold < _validation_config.min_word_threshold:
+        errors.append(f"Word threshold must be at least {_validation_config.min_word_threshold:,}.")
 
-    if cfg.review_chunk_size < 1 or cfg.review_chunk_size > 20:
-        errors.append("Chunk size must be between 1 and 20.")
+    if cfg.review_chunk_size < _validation_config.min_chunk_size or cfg.review_chunk_size > _validation_config.max_chunk_size:
+        errors.append(f"Chunk size must be between {_validation_config.min_chunk_size} and {_validation_config.max_chunk_size}.")
 
     return errors
 
 
-# Re-export max_title_length for frontend use
-max_title_length = _config.ui.title_max_length
+

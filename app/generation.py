@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Shared config — single source of truth
 _shared_config = get_default_shared_config()
+_gen_config = _shared_config.generation
 
 def _unwrap_json_content(text: str) -> str:
     """If text looks like JSON wrapping plain content, extract the inner text.
@@ -107,8 +108,7 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
 
     messages = [
         {"role": "system", "content": (
-            f"You are a creative writing assistant. Generate a compelling one-paragraph summary "
-            f"for a {book.length} in the {tags_str} genre."
+            _gen_config.summary_system_prompt.format(length=book.length, tags=tags_str)
         )},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
@@ -123,7 +123,7 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
     _update_progress(book, "Generating summary...", percentage=10)
     save_book(book.id, book)
 
-    response = await ai_client.generate_completion(messages, temperature=0.7)
+    response = await ai_client.generate_completion(messages, temperature=_gen_config.summary_temperature)
     summary = _extract_content(response)
 
     book.summary = summary
@@ -146,9 +146,9 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
 
     messages = [
         {"role": "system", "content": (
-            f"You are a creative writing assistant. Generate a chapter outline for a {book.length} "
-            f"({word_guidance} words) in the {tags_str} genre. "
-            f"The book must have {chapter_guidance}."
+            _gen_config.outline_system_prompt.format(
+                length=book.length, word_count=word_guidance, tags=tags_str, chapter_guidance=chapter_guidance
+            )
         )},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
@@ -171,7 +171,7 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
     _update_progress(book, "Generating outline...", percentage=30)
     save_book(book.id, book)
 
-    response = await ai_client.generate_completion(messages, temperature=0.7)
+    response = await ai_client.generate_completion(messages, temperature=_gen_config.outline_temperature)
     outline_chapters = parse_outline(response, [])
 
     # Enforce chapter count to match the length tier
@@ -233,9 +233,9 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
 
         messages = [
             {"role": "system", "content": (
-                f"You are a creative writing assistant. Write chapter {chapter_num} of a {book.length} "
-                f"in the {tags_str} genre. Target {word_guidance} words for the full book. "
-                f"Return ONLY plain text narrative — do NOT wrap output in JSON or code blocks."
+                _gen_config.chapter_system_prompt.format(
+                    chapter_num=chapter_num, length=book.length, tags=tags_str, word_count=word_guidance
+                )
             )},
             {"role": "user", "content": (
                 "".join(context_parts) +
@@ -251,12 +251,12 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
                          percentage=40 + int(i / total * 30))
         save_book(book.id, book)
 
-        response = await ai_client.generate_completion(messages, temperature=0.8)
+        response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_temperature)
         chapter_content = _extract_content(response)
         # Unwrap JSON if the LLM returned JSON despite being asked for plain text
         chapter_content = _unwrap_json_content(chapter_content)
 
-        if not chapter_content or len(chapter_content.strip()) < 100:
+        if not chapter_content or len(chapter_content.strip()) < _gen_config.min_chapter_chars:
             raise ValueError(f"Chapter '{title}' generation produced insufficient content")
 
         book.chapters[title] = chapter_content
@@ -284,11 +284,7 @@ async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_
     Used to provide continuity context for subsequent chapters.
     """
     messages = [
-        {"role": "system", "content": (
-            "You are a literary analyst. Summarize the following chapter in a single, concise paragraph "
-            "(2-4 sentences) capturing the key events, character developments, and any plot threads "
-            "that carry forward to the next chapter."
-        )},
+        {"role": "system", "content": _gen_config.chapter_summary_system_prompt},
         {"role": "user", "content": (
             f"Chapter: {chapter_title}\n\n"
             f"Content:\n{chapter_content}\n\n"
@@ -296,5 +292,5 @@ async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_
         )},
     ]
 
-    response = await ai_client.generate_completion(messages, temperature=0.3)
+    response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_summary_temperature)
     return _extract_content(response)
