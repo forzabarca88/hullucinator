@@ -12,6 +12,10 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 - After every change, run the full test suite prior to considering the task complete.
 - **Follow software engineering best practices** and minimise future technical debt at all times.
 
+## Credential Validation
+
+**Book creation, retry, and manual review endpoints must validate API credentials before queuing.** The `_check_configured_and_connected()` function performs a live test request to the LLM provider's models endpoint. This prevents books from being queued when the API key is missing or invalid, avoiding wasted background tasks that would fail later. The basic `_check_configured()` function (checks endpoint, model, and API key presence) is used for read-only endpoints like `/api/config` and `/api/health`.
+
 ## Content Security Policy
 
 **Never load external resources via CDN.** The app enforces a strict CSP that blocks all cross-origin requests. All fonts, stylesheets, and scripts must be self-hosted. After any frontend change, verify no CSP violations in the browser console.

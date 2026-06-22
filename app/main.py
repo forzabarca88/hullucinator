@@ -111,14 +111,48 @@ async def _get_semaphore() -> asyncio.Semaphore:
 
 
 def _check_configured():
-    """Raise 400 if AI is not configured (checks live client state)."""
+    """Raise 400 if AI is not configured (checks live client state).
+
+    Requires endpoint URL, model name, and a non-empty API key.
+    """
     if not ai_client.endpoint_url or not ai_client.model_name:
         server_config.configured = False
         raise HTTPException(
             status_code=400,
             detail="AI is not configured. Please set your endpoint URL, model, and API key in Settings first.",
         )
+    if ai_client.api_key is None or ai_client.api_key == "":
+        server_config.configured = False
+        raise HTTPException(
+            status_code=400,
+            detail="API key is not set. Please configure your API key in Settings before queuing a book.",
+        )
     server_config.configured = True
+
+
+async def _check_configured_and_connected():
+    """Raise 400 if AI is not configured or credentials are invalid.
+
+    Performs the basic configured check, then sends a lightweight test
+    request to the models endpoint to verify the API key works.
+    Rejects book creation before queuing to avoid wasted background tasks.
+    """
+    _check_configured()
+
+    try:
+        models = await ai_client.list_models()
+        if not models:
+            raise HTTPException(
+                status_code=400,
+                detail="API key appears invalid — no models returned from the endpoint. Please check your API key in Settings.",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to verify API credentials: {e}. Please check your endpoint URL and API key in Settings.",
+        )
 
 
 def _check_endpoint(endpoint_url: str | None = None):
@@ -193,6 +227,7 @@ app.include_router(
         active_tasks=_active_tasks,
         get_semaphore=_get_semaphore,
         check_configured=_check_configured,
+        check_configured_and_connected=_check_configured_and_connected,
         check_endpoint=_check_endpoint,
     )
 )

@@ -84,6 +84,8 @@ Open http://localhost:8000 in your browser. On first launch, the setup wizard gu
    | Epic / Saga | 15–25 | 50,000+ |
 5. Click **"Generate Book"** — generation runs in the background with a live progress bar
 
+> **Note:** Before queuing a book, the system validates your API credentials with a live test request to the LLM provider. If the endpoint is unreachable, the API key is missing, or the key is invalid (e.g., 401 Unauthorized), book creation is rejected immediately — preventing wasted background tasks that would fail later.
+
 ### Browse Your Library
 
 - See all generated books with status indicators, genre tags, and length badges
