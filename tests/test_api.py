@@ -79,6 +79,24 @@ class TestHealthEndpoint:
         assert data["status"] == "healthy"
         assert data["service"] == "hullucinator"
 
+    @pytest.mark.asyncio
+    async def test_coop_coep_headers(self, client):
+        """Response includes COOP header; COEP same-origin allows cross-origin model fetches."""
+        resp = await client.get("/api/health")
+        assert resp.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
+        assert resp.headers.get("Cross-Origin-Embedder-Policy") == "same-origin"
+
+    @pytest.mark.asyncio
+    async def test_csp_headers(self, client):
+        """CSP allows HTTPS for model downloads and unsafe-eval for TTS WASM."""
+        resp = await client.get("/api/health")
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "default-src 'self' https:" in csp
+        # script-src allows unsafe-eval/wasm-unsafe-eval/blob: for kokoro-js WASM blob imports
+        assert "'unsafe-eval'" in csp
+        assert "'wasm-unsafe-eval'" in csp
+        assert "blob:" in csp
+
 
 class TestConfigEndpoints:
     """Test AI configuration endpoints."""
@@ -486,6 +504,135 @@ class TestBookEndpoints:
 
 
 
+class TestTTSEndpoint:
+    """Test the TTS text endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_tts_text_not_found(self, client):
+        """GET /api/books/{id}/tts-text returns 404 for unknown book."""
+        resp = await client.get("/api/books/nonexistent-id/tts-text")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_tts_text_no_chapters(self, client):
+        """GET /api/books/{id}/tts-text returns 400 when book has no chapters."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            resp = await client.post("/api/books/create", json={
+                "title": "No Chapters Book",
+                "prompt": "A test book",
+            })
+            assert resp.status_code == 200
+            book_id = resp.json()["book_id"]
+
+            resp = await client.get(f"/api/books/{book_id}/tts-text")
+            assert resp.status_code == 400
+            assert "no chapters" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_tts_text_strips_markdown(self, client):
+        """GET /api/books/{id}/tts-text returns plain text with markdown stripped."""
+        from app.storage import save_book
+        from app.schemas import BookState
+
+        book = BookState(
+            id="test-book-123",
+            title="Test Book",
+            prompt="A test book",
+            status="completed",
+            chapters={
+                "Chapter 1": "**Bold text** and *italic* and `code block` here.\n\n# Heading\n\n- list item\n\n> blockquote\n\n[link](http://example.com)\n\n```\ncode fence\n```\n\n---",
+            },
+            progress={"current_step": "completed", "percentage": 100},
+        )
+        save_book("test-book-123", book)
+
+        resp = await client.get("/api/books/test-book-123/tts-text?chapter=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Chapter 1"
+        assert data["chapter_index"] == 0
+        assert data["total_chapters"] == 1
+        # Markdown should be stripped
+        assert "**" not in data["text"]
+        assert "*" not in data["text"]
+        assert "`" not in data["text"]
+        assert "#" not in data["text"]
+        assert "[" not in data["text"]
+        assert "```" not in data["text"]
+        assert "---" not in data["text"]
+        # Content should remain
+        assert "Bold text" in data["text"]
+        assert "italic" in data["text"]
+
+    @pytest.mark.asyncio
+    async def test_tts_text_chapter_index(self, client):
+        """GET /api/books/{id}/tts-text returns correct chapter by index."""
+        from app.storage import save_book
+        from app.schemas import BookState
+
+        book = BookState(
+            id="test-book-multi",
+            title="Multi Chapter Book",
+            prompt="A test book",
+            status="completed",
+            chapters={
+                "Chapter One": "First chapter content",
+                "Chapter Two": "Second chapter content",
+                "Chapter Three": "Third chapter content",
+            },
+            progress={"current_step": "completed", "percentage": 100},
+        )
+        save_book("test-book-multi", book)
+
+        # Chapter 0
+        resp = await client.get("/api/books/test-book-multi/tts-text?chapter=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Chapter One"
+        assert data["text"] == "First chapter content"
+        assert data["total_chapters"] == 3
+
+        # Chapter 2
+        resp = await client.get("/api/books/test-book-multi/tts-text?chapter=2")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "Chapter Three"
+        assert data["text"] == "Third chapter content"
+
+    @pytest.mark.asyncio
+    async def test_tts_text_out_of_range(self, client):
+        """GET /api/books/{id}/tts-text returns 400 for out-of-range chapter."""
+        from app.storage import save_book
+        from app.schemas import BookState
+
+        book = BookState(
+            id="test-book-range",
+            title="Range Test Book",
+            prompt="A test book",
+            status="completed",
+            chapters={"Chapter 1": "Content"},
+            progress={"current_step": "completed", "percentage": 100},
+        )
+        save_book("test-book-range", book)
+
+        # Index too high
+        resp = await client.get("/api/books/test-book-range/tts-text?chapter=5")
+        assert resp.status_code == 400
+        assert "out of range" in resp.json()["detail"].lower()
+
+        # Negative index
+        resp = await client.get("/api/books/test-book-range/tts-text?chapter=-1")
+        assert resp.status_code == 400
+        assert "out of range" in resp.json()["detail"].lower()
+
+
 class TestWebUI:
     """Test the web interface."""
 
@@ -500,6 +647,7 @@ class TestWebUI:
         assert "config.js" in body
         assert "ui.js" in body
         assert "renderers.js" in body
+        assert "tts-manager.js" in body
         assert "app.js" in body
         assert "settings.js" in body
         assert "boot.js" in body

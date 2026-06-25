@@ -95,6 +95,25 @@ function renderDetail(book) {
     html += buildReviewSection(book.review, book.review_history);
   }
 
+  // TTS Playback Controls (for completed/reviewed books with chapters)
+  if (book.chapters && (book.status === 'completed' || book.status === 'reviewed')) {
+    const entries = Object.entries(book.chapters);
+    html += `<div class="modal-section">
+      <h3>Play Book</h3>
+      <div class="tts-controls" data-book-id="${book.id}">
+        <select class="tts-voice-select" id="ttsVoiceSelect" title="Select voice">
+          ${bookTTS?.VOICE_POOL?.map(v => `<option value="${v}">${v}</option>`).join('')}
+        </select>
+        <button class="tts-btn tts-btn-play" data-tts-action="play" title="Play from beginning">▶ Play</button>
+        <button class="tts-btn" data-tts-action="resume" title="Resume from last position">↻ Resume</button>
+        <button class="tts-btn" data-tts-action="stop" title="Stop playback">■ Stop</button>
+        <button class="tts-btn" data-tts-action="next" title="Play next chapter">⏭ Next</button>
+        <div class="tts-status" id="ttsStatus">Ready</div>
+      </div>
+      <div class="tts-progress-bar"><div class="tts-progress-fill" id="ttsProgressFill" style="width:0%"></div></div>
+    </div>`;
+  }
+
   // Actions
   html += `<div class="modal-section" style="display:flex;gap:0.5rem;flex-wrap:wrap">`;
   if (book.status === 'completed' || book.status === 'reviewed') {

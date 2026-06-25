@@ -11,10 +11,11 @@ Organized by resource:
 import uuid
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 
 from app.ai_client import AIClient, ReviewerClient, _parse_models_response, _build_api_url
 from app.orchestrator import Orchestrator
@@ -115,6 +116,11 @@ def create_router(
         if index_path.exists():
             return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
         return HTMLResponse(content=_MINIMAL_INDEX, status_code=200)
+
+    @router.get("/favicon.ico", response_class=Response)
+    async def favicon():
+        """Suppress browser favicon 404."""
+        return Response(status_code=204)
 
     # ── Health Check ────────────────────────────────────────────────────
 
@@ -674,5 +680,53 @@ def create_router(
 
         logger.info("Deleted book '%s' (%s)", book_state.title, book_id)
         return {"status": "deleted", "book_id": book_id}
+
+    # ── TTS Text Endpoint ───────────────────────────────────────────────
+
+    @router.get("/api/books/{book_id}/tts-text")
+    async def get_book_tts_text(book_id: str, chapter: int = 0):
+        """Get plain text of a chapter for TTS playback.
+
+        Returns chapter content with markdown formatting stripped,
+        optimized for text-to-speech synthesis.
+        """
+        book_state = load_book(book_id)
+        if not book_state:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        if not book_state.chapters:
+            raise HTTPException(status_code=400, detail="Book has no chapters")
+
+        chapter_titles = list(book_state.chapters.keys())
+        if chapter < 0 or chapter >= len(chapter_titles):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Chapter index {chapter} out of range (0-{len(chapter_titles) - 1})"
+            )
+
+        title = chapter_titles[chapter]
+        content = book_state.chapters[title]
+
+        # Strip markdown for cleaner speech
+        # Code fences first (before inline code), to avoid orphaned backticks
+        plain_text = content
+        plain_text = re.sub(r'```[\s\S]*?```', '', plain_text)
+        plain_text = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', plain_text)
+        plain_text = re.sub(r'\*\*(.+?)\*\*', r'\1', plain_text)
+        plain_text = re.sub(r'\*(.+?)\*', r'\1', plain_text)
+        plain_text = re.sub(r'`[^`]+`', '', plain_text)
+        plain_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', plain_text)
+        plain_text = re.sub(r'#{1,6}\s*', '', plain_text)
+        plain_text = re.sub(r'^[-*+]\s+', '', plain_text, flags=re.MULTILINE)
+        plain_text = re.sub(r'^\d+[.)]\s+', '', plain_text, flags=re.MULTILINE)
+        plain_text = re.sub(r'^>\s+', '', plain_text, flags=re.MULTILINE)
+        plain_text = re.sub(r'^---+$', '', plain_text, flags=re.MULTILINE)
+
+        return {
+            "title": title,
+            "text": plain_text.strip(),
+            "chapter_index": chapter,
+            "total_chapters": len(chapter_titles),
+        }
 
     return router
