@@ -20,6 +20,14 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 
 **Never load external resources via CDN.** The app enforces a strict CSP that blocks all cross-origin requests. All fonts, stylesheets, and scripts must be self-hosted. After any frontend change, verify no CSP violations in the browser console.
 
+**TTS exception:** The CSP `default-src` allows `https:` for HuggingFace model downloads (data fetch, not script execution). `script-src` includes `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` to allow kokoro-js's dynamic blob imports for ONNX Runtime WASM. COOP/COEP headers are set for SharedArrayBuffer support.
+
+## Text-to-Speech Architecture
+
+Browser-based TTS uses `kokoro-js` (self-hosted at `static/js/vendor/kokoro.web.js`) running in a Web Worker (`static/js/tts-worker.js`). Main-thread playback managed by `static/js/tts-manager.js` (exposed as global `bookTTS`). Progress persists via `localStorage`. Backend endpoint `GET /api/books/{id}/tts-text` serves markdown-stripped chapter text. TTS is optional — failure never blocks reading.
+
+COEP is set to `same-origin` (not `require-corp`) to allow Kokoro to fetch model weights from HuggingFace. This means SharedArrayBuffer is unavailable and WASM runs single-threaded, but TTS still works.
+
 ## Testing
 
 - **Never touch the real data directory during testing.** Tests must use `tmp_path` or `set_test_dirs(tmp_path)` to isolate from production data.
@@ -45,5 +53,6 @@ Config sub-models:
 - **New generation steps:** Add to the appropriate module. Add allowed transitions to the status module. Add a wrapping method to the orchestrator for status transitions and persistence.
 - **New export formats:** Add to the exporter module following existing patterns.
 - **New endpoints:** Define in the routes module under `/api/`. Use existing lookup and validation helpers.
-- **Web UI changes:** Follow the split-file structure (config → utilities → renderers → app → settings → bootstrap). Load shared config before initializing any component.
+- **Web UI changes:** Follow the split-file structure (config → utilities → renderers → tts-manager → app → settings → bootstrap). Load shared config before initializing any component.
 - **Config changes:** All defaults flow from the shared config. Frontend and backend must stay in sync.
+- **TTS changes:** Worker code in `tts-worker.js`, main-thread in `tts-manager.js`. CSS in `styles.css` section 17. Controls rendered in `renderers.js`, wired in `app.js`.

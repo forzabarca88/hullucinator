@@ -15,6 +15,7 @@ Generate complete e-books from a simple prompt. Provide a title, topic, genre ta
 - **Model discovery** — Fetch available models from your LLM provider
 - **Rich exports** — EPUB with CSS styling, TOC, drop caps, and review metadata; PDF with configurable fonts
 - **Live progress tracking** — Real-time progress bar with chapter-by-chapter updates
+- **Browser TTS playback** — Listen to completed books chapter-by-chapter with 28 built-in voices (Kokoro TTS). Progress persists across sessions.
 
 ## Quick Start
 
@@ -112,6 +113,20 @@ Once a book is complete (or reviewed), download it in your preferred format:
 
 - **Delete** — Hover over a book card to reveal the 🗑 button, or use the delete button in the detail modal. Confirmation is required.
 - **Retry** — Restart generation for failed books; the old failed entry is automatically removed.
+
+### Text-to-Speech
+
+For completed or reviewed books, a **Play Book** section appears with browser-based TTS controls:
+
+- **Play** — Start reading from the first chapter
+- **Resume** — Continue from your last position (saved in localStorage)
+- **Stop** — Halt playback
+- **Next** — Jump to the next chapter
+- **Voice selector** — Choose from 28 built-in voices (American/British English, male/female)
+
+TTS uses [kokoro-js](https://github.com/hexadooks-kokoro-js/kokoro-js), an open-weight 82M-parameter model that runs entirely in your browser via ONNX/WASM. The model (~43MB) downloads on first use and is cached by the browser. Playback progress persists across page reloads.
+
+> **Note:** TTS requires a secure context (HTTPS or localhost) and COOP/COEP headers for optimal multi-threaded performance. If unavailable, playback falls back to single-threaded mode (slower). TTS failure never blocks book reading.
 
 ## Settings
 

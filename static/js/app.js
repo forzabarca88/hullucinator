@@ -206,6 +206,59 @@ function attachModalActionListeners(bookId) {
       else if (action === 'delete') deleteBook(bookId, $('detailTitle').textContent);
     });
   });
+
+  // TTS playback controls
+  const ttsControls = detailContent.querySelector('.tts-controls');
+  if (ttsControls) {
+    const voiceSelect = $('ttsVoiceSelect');
+    const ttsStatus = $('ttsStatus');
+    const ttsProgressFill = $('ttsProgressFill');
+
+    // Restore saved voice preference
+    const progress = bookTTS.loadProgress(bookId);
+    if (progress && voiceSelect) {
+      voiceSelect.value = progress.voice || bookTTS.VOICE_POOL[0];
+    }
+
+    ttsControls.querySelectorAll('[data-tts-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.ttsAction;
+        const voice = voiceSelect?.value || bookTTS.VOICE_POOL[0];
+
+        if (action === 'play') {
+          ttsStatus.textContent = 'Initializing...';
+          const ok = await bookTTS.initialize();
+          if (!ok) { ttsStatus.textContent = 'TTS unavailable'; return; }
+          await bookTTS.playChapter(bookId, 0, voice);
+        } else if (action === 'resume') {
+          const saved = bookTTS.loadProgress(bookId);
+          if (!saved) { toast('No saved progress to resume.', 'info'); return; }
+          ttsStatus.textContent = 'Initializing...';
+          const ok = await bookTTS.initialize();
+          if (!ok) { ttsStatus.textContent = 'TTS unavailable'; return; }
+          await bookTTS.playChapter(bookId, saved.lastChapterIndex, saved.voice);
+        } else if (action === 'stop') {
+          bookTTS.stop();
+          ttsStatus.textContent = 'Stopped';
+          if (ttsProgressFill) ttsProgressFill.style.width = '0%';
+        } else if (action === 'next') {
+          const saved = bookTTS.loadProgress(bookId);
+          if (saved) {
+            await bookTTS.playChapter(bookId, saved.lastChapterIndex + 1, saved.voice);
+          }
+        }
+      });
+    });
+
+    // Update status display during playback
+    bookTTS._onStatusChange = (status, chapterIndex, totalChapters) => {
+      if (ttsStatus) ttsStatus.textContent = status;
+      if (ttsProgressFill) {
+        const pct = totalChapters > 0 ? ((chapterIndex + 1) / totalChapters * 100) : 0;
+        ttsProgressFill.style.width = pct + '%';
+      }
+    };
+  }
 }
 
 async function openDetail(bookId) {
@@ -246,6 +299,7 @@ async function openDetail(bookId) {
 function closeModal() {
   $('detailOverlay').classList.remove('active');
   stopPolling();
+  bookTTS.stop();
   currentBookId = null;
 }
 

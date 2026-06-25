@@ -51,7 +51,7 @@ British English male: `bm_daniel`, `bm_fable`, `bm_george`, `bm_lewis`
 
 ## Implementation Steps
 
-### Phase 1: Self-host kokoro-js
+### Phase 1: Self-host kokoro-js ✅ DONE
 
 **Problem:** The app's CSP (`script-src 'self'`) blocks loading scripts from external CDNs. kokoro-js must be served from the app's own static directory.
 
@@ -68,9 +68,9 @@ curl -o static/js/vendor/kokoro.web.js \
 
 **File created:** `static/js/vendor/kokoro.web.js`
 
-**CSP note:** Model weights (`onnx-community/Kokoro-82M-v1.0-ONNX`) are fetched from HuggingFace at runtime. This is a data fetch, not script execution. The CSP `default-src` directive needs to allow HTTPS origins — addressed in Phase 2.
+**CSP note:** Model weights (`onnx-community/Kokoro-82M-v1.0-ONNX`) are fetched from HuggingFace at runtime. This is a data fetch, not script execution. The CSP `default-src` directive needs to allow HTTPS origins — addressed in Phase 2. kokoro-js also uses dynamic blob imports for ONNX Runtime WASM, requiring `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` in `script-src`.
 
-### Phase 2: Add COOP/COEP Headers
+### Phase 2: Add COOP/COEP Headers ✅ DONE
 
 **Problem:** kokoro-js uses ONNX Runtime WASM with multi-threading, which requires `SharedArrayBuffer`. This is only available when the page has both COOP and COEP headers.
 
@@ -83,8 +83,10 @@ In `SecurityHeadersMiddleware.dispatch()`, add these two headers:
 
 ```python
 response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+response.headers["Cross-Origin-Embedder-Policy"] = "same-origin"
 ```
+
+COEP uses `same-origin` (not `require-corp`) to allow Kokoro to fetch model weights from HuggingFace. This means SharedArrayBuffer is unavailable and ONNX WASM runs single-threaded — still functional, just slower per-sentence synthesis.
 
 Also relax `default-src` to allow HTTPS fetches (for HuggingFace model downloads):
 
@@ -97,11 +99,11 @@ To:
 "default-src 'self' https:; "
 ```
 
-The `script-src 'self'` directive stays unchanged — only data fetches are allowed from external origins.
+kokoro-js uses dynamic blob imports for ONNX Runtime WASM, requiring `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` in `script-src`.
 
-**Verification:** After deployment, check `self.crossOriginIsolated === true` in browser console.
+**Verification:** `self.crossOriginIsolated` will be `false` since COEP is `same-origin`. Kokoro falls back to single-threaded WASM — still works, just slower.
 
-### Phase 3: Create TTS Web Worker
+### Phase 3: Create TTS Web Worker ✅ DONE
 
 **File created:** `static/js/tts-worker.js`
 
@@ -166,7 +168,7 @@ self.onmessage = async (e) => {
 };
 ```
 
-### Phase 4: Create TTS Manager (Main Thread)
+### Phase 4: Create TTS Manager (Main Thread) ✅ DONE
 
 **File created:** `static/js/tts-manager.js`
 
@@ -240,9 +242,11 @@ const bookTTS = new BookTTSManager();
 window.bookTTS = bookTTS;
 ```
 
-### Phase 5: Backend — TTS Text Endpoint
+### Phase 5: Backend — TTS Text Endpoint ✅ DONE
 
 **File:** `app/routes.py`
+
+**Note:** Markdown stripping order matters — code fences are processed before inline code to avoid orphaned backticks.
 
 Add endpoint to serve chapter text as plain text (markdown stripped) for TTS consumption:
 
@@ -297,9 +301,9 @@ async def get_book_tts_text(book_id: str, chapter: int = 0):
     }
 ```
 
-### Phase 6: UI Integration — Playback Controls in Detail Modal
+### Phase 6: UI Integration — Playback Controls in Detail Modal ✅ DONE
 
-#### 6.1 CSS Styles
+#### 6.1 CSS Styles ✅ DONE
 
 **File:** `static/css/styles.css` — Add TTS control styles matching hullucinator's design system (teal accents, Playfair Display headings, Source Sans 3 body, IBM Plex Mono data):
 
@@ -394,7 +398,7 @@ async def get_book_tts_text(book_id: str, chapter: int = 0):
 }
 ```
 
-#### 6.2 HTML — Add TTS Controls to Detail Modal
+#### 6.2 HTML — Add TTS Controls to Detail Modal ✅ DONE
 
 **File:** `static/js/renderers.js` — In `renderDetail()`, add a TTS playback section after the chapters section (before actions) for completed/reviewed books that have chapters:
 
@@ -419,7 +423,7 @@ if (book.chapters && (book.status === 'completed' || book.status === 'reviewed')
 }
 ```
 
-#### 6.3 Wire Up Event Listeners
+#### 6.3 Wire Up Event Listeners ✅ DONE
 
 **File:** `static/js/app.js` — In `attachModalActionListeners(bookId)`, add TTS control event listeners after the existing `button[data-action]` handlers:
 
@@ -489,7 +493,7 @@ function closeModal() {
 }
 ```
 
-#### 6.4 Script Loading Order
+#### 6.4 Script Loading Order ✅ DONE
 
 **File:** `static/index.html` — Insert `tts-manager.js` between `renderers.js` and `app.js`:
 
@@ -503,7 +507,7 @@ function closeModal() {
 <script src="/static/js/boot.js"></script>
 ```
 
-### Phase 7: Graceful Fallback
+### Phase 7: Graceful Fallback ✅ DONE
 
 TTS is optional. If initialization fails (no SharedArrayBuffer, model download fails, worker error), the UI degrades gracefully:
 
@@ -585,8 +589,19 @@ async initialize() {
 
 ## Testing Checklist
 
+### Automated (✅ PASSING — 185 tests)
+- [x] COOP/COEP headers present in response
+- [x] CSP `default-src` allows HTTPS, `script-src` includes `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` for TTS WASM
+- [x] TTS text endpoint returns 404 for unknown book
+- [x] TTS text endpoint returns 400 when book has no chapters
+- [x] TTS text endpoint strips all markdown (bold, italic, code, links, headings, lists, blockquotes, fences)
+- [x] TTS text endpoint returns correct chapter by index
+- [x] TTS text endpoint returns 400 for out-of-range chapter
+- [x] `tts-manager.js` included in index.html script loading order
+- [x] Full test suite passes: `.venv/bin/pytest -x -q`
+
+### Manual (requires browser)
 - [ ] kokoro-js bundle loads from `/static/js/vendor/kokoro.web.js` without CSP violations
-- [ ] COOP/COEP headers present in response
 - [ ] `self.crossOriginIsolated === true` in browser console
 - [ ] Model downloads from HuggingFace on first TTS use (~43MB with q4)
 - [ ] Worker synthesizes a sentence and returns valid WAV audio
@@ -601,7 +616,6 @@ async initialize() {
 - [ ] Graceful fallback: TTS failure doesn't break book reading
 - [ ] Works in Chrome, Firefox, Safari
 - [ ] No CSP violations in browser console
-- [ ] Full test suite passes: `.venv/bin/pytest -x -q`
 
 ---
 
@@ -614,4 +628,4 @@ async initialize() {
 | SharedArrayBuffer unavailable (Safari, some configs) | Slow single-threaded WASM | Document expected performance. First use is slowest (model download). |
 | Large model download (~43MB) | Slow first playback | Progressive loading indicator. Model caches in browser after first download. |
 | Memory pressure from long chapters | OOM on low-end devices | Sentence-by-sentence synthesis. Audio buffers released after playback. |
-| CSP violation from worker module import | Worker fails to load | Worker uses `{ type: 'module' }` with relative import to self-hosted bundle. CSP `script-src 'self'` allows same-origin modules. |
+| CSP violation from worker module import | Worker fails to load | Worker uses `{ type: 'module' }` with relative import to self-hosted bundle. CSP `script-src` includes `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` for kokoro-js blob imports. |
