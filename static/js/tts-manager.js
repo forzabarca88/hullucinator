@@ -69,6 +69,7 @@ class BookTTSManager {
     this._currentChapterIndex = 0;
     this._totalChapters = 0;
     this._onStatusChange = null;
+    this._currentSource = null;
   }
 
   async initialize() {
@@ -146,7 +147,11 @@ class BookTTSManager {
       if (data.type === 'error') {
         this._workerBusy = false;
         console.error('[TTS] Worker error:', data.message);
-        this._synthesizeNext();
+        // Halt playback and clear queues to prevent infinite error cascade
+        this.stop();
+        if (this._onStatusChange) {
+          this._onStatusChange(`Error: ${data.message}`);
+        }
       }
     };
   }
@@ -248,6 +253,7 @@ class BookTTSManager {
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(this.audioContext.destination);
+    this._currentSource = source;
 
     source.onended = () => {
       // Save progress after each sentence
@@ -277,14 +283,18 @@ class BookTTSManager {
 
   _stopPlayback() {
     this._isPlaying = false;
-    this.audioQueue = [];
-    this.sentenceQueue = [];
     this._workerBusy = false;
-    this._activeId = 0;
+    this.audioQueue = [];  // discard pending audio buffers
+    this.sentenceQueue = []; // discard pending sentences
+    this._activeId = 0;     // invalidate in-flight synthesis ids
 
-    if (this.worker) {
-      this.worker.postMessage({ type: 'stop' });
+    // Stop any active AudioContext source
+    if (this._currentSource) {
+      try { this._currentSource.stop(); } catch {}
+      this._currentSource = null;
     }
+
+    // Worker keeps the model loaded; no message needed
 
     if (this._onStatusChange) {
       this._onStatusChange('Stopped', this._currentChapterIndex, this._totalChapters);

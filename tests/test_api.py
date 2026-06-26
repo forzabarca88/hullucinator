@@ -81,10 +81,10 @@ class TestHealthEndpoint:
 
     @pytest.mark.asyncio
     async def test_coop_coep_headers(self, client):
-        """Response includes COOP header; COEP same-origin allows cross-origin model fetches."""
+        """Response includes COOP header; COEP credentialless enables SharedArrayBuffer for multi-threaded WASM."""
         resp = await client.get("/api/health")
         assert resp.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
-        assert resp.headers.get("Cross-Origin-Embedder-Policy") == "same-origin"
+        assert resp.headers.get("Cross-Origin-Embedder-Policy") == "credentialless"
 
     @pytest.mark.asyncio
     async def test_csp_headers(self, client):

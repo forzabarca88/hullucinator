@@ -7,7 +7,7 @@
  * Messages received:
  *   { type: 'init', modelId?, dtype?, device? }  — load model
  *   { type: 'generate', id, text, voice }          — synthesize sentence
- *   { type: 'stop' }                                — unload model
+ *   { type: 'stop' }                                — halt playback (model stays loaded)
  *
  * Messages sent:
  *   { type: 'ready', device, dtype }               — model loaded
@@ -17,8 +17,10 @@
  */
 import { KokoroTTS, env } from './vendor/kokoro.web.js';
 
-// Configure ONNX Runtime WASM multi-threading for faster inference
+// Configure ONNX Runtime WASM self-hosting paths and multi-threading
 if (env?.backends?.onnx?.wasm) {
+  // Point to our self-hosted vendor folder containing the .mjs and .wasm files
+  env.backends.onnx.wasm.wasmPaths = new URL('../vendor/', self.location.href).toString();
   env.backends.onnx.wasm.numThreads = navigator.hardwareConcurrency || 4;
 }
 
@@ -29,6 +31,11 @@ self.onmessage = async (e) => {
   const { type, id, text, voice, modelId, dtype, device } = e.data;
 
   if (type === 'init') {
+    // If already initialized, return ready immediately (idempotent)
+    if (isInitialized && kokoro) {
+      self.postMessage({ type: 'ready', device: kokoro.device, dtype: kokoro.dtype });
+      return;
+    }
     try {
       kokoro = await KokoroTTS.from_pretrained(
         modelId || 'onnx-community/Kokoro-82M-v1.0-ONNX',
@@ -43,8 +50,8 @@ self.onmessage = async (e) => {
   }
 
   if (type === 'stop') {
-    kokoro = null;
-    isInitialized = false;
+    // Keep the model loaded in memory so subsequent play requests start instantly.
+    // Memory is only released when the worker itself is terminated.
     return;
   }
 

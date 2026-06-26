@@ -20,13 +20,15 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 
 **Never load external resources via CDN.** The app enforces a strict CSP that blocks all cross-origin requests. All fonts, stylesheets, and scripts must be self-hosted. After any frontend change, verify no CSP violations in the browser console.
 
-**TTS exception:** The CSP `default-src` allows `https:` for HuggingFace model downloads (data fetch, not script execution). `script-src` includes `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` to allow kokoro-js's dynamic blob imports for ONNX Runtime WASM. COOP/COEP headers are set for SharedArrayBuffer support.
+**TTS exception:** The CSP `default-src` allows `https:` for HuggingFace model downloads (data fetch, not script execution). `script-src` includes `'unsafe-eval'`, `'wasm-unsafe-eval'`, and `blob:` to allow kokoro-js's dynamic blob imports for ONNX Runtime WASM. COOP/COEP headers enable Cross-Origin Isolation for SharedArrayBuffer support.
 
 ## Text-to-Speech Architecture
 
 Browser-based TTS uses `kokoro-js` (self-hosted at `static/js/vendor/kokoro.web.js`) running in a Web Worker (`static/js/tts-worker.js`). Main-thread playback managed by `static/js/tts-manager.js` (exposed as global `bookTTS`). Progress persists via `localStorage`. Backend endpoint `GET /api/books/{id}/tts-text` serves markdown-stripped chapter text. TTS is optional — failure never blocks reading.
 
-COEP is set to `same-origin` (not `require-corp`) to allow Kokoro to fetch model weights from HuggingFace. This means SharedArrayBuffer is unavailable and WASM runs single-threaded, but TTS still works.
+COEP is set to `credentialless` to enable Cross-Origin Isolation, unlocking `SharedArrayBuffer` and multi-threaded WASM inference. ONNX Runtime WASM binaries (`ort-wasm-simd-threaded.jsep.mjs` and `.wasm`) are self-hosted in `static/js/vendor/` and referenced via `wasmPaths` in the worker. HuggingFace model weights are fetched with CORS, which is compatible with `credentialless`.
+
+**TTS model lifecycle:** The worker keeps the Kokoro model loaded across `stop()` calls for instant replay. `init` is idempotent — repeated calls return `ready` immediately without reloading. The manager's `stop()` clears queues but preserves `isInitialized`. Only `destroy()` terminates the worker and releases WASM memory.
 
 ## Testing
 
