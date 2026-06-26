@@ -14,7 +14,7 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 
 ## Credential Validation
 
-**Book creation, retry, and manual review endpoints must validate API credentials before queuing.** The `_check_configured_and_connected()` function performs a live test request to the LLM provider's models endpoint. This prevents books from being queued when the API key is missing or invalid, avoiding wasted background tasks that would fail later. The basic `_check_configured()` function (checks endpoint, model, and API key presence) is used for read-only endpoints like `/api/config` and `/api/health`.
+**Book creation, retry, and manual review endpoints must validate API credentials before queuing.** The `_check_configured_and_connected()` function checks endpoint URL and model name, then sends a lightweight test request to the LLM provider's models endpoint to verify connectivity and credentials. This prevents books from being queued when the API key is missing or invalid, avoiding wasted background tasks that would fail later. The test request itself is the sole credential validator — it succeeds for endpoints that don't require API keys, and fails naturally when credentials are invalid. The basic `_check_configured()` function (checks endpoint URL and model name only, does not require API key) is used for read-only endpoints like `/api/config` and `/api/health`.
 
 ## Content Security Policy
 

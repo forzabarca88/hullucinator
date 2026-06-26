@@ -383,18 +383,22 @@ class TestBookEndpoints:
 
     @pytest.mark.asyncio
     async def test_create_book_no_api_key(self, client):
-        """POST /api/books/create fails when API key is not set."""
+        """POST /api/books/create fails when credentials are invalid (live test request fails)."""
         ai_client.endpoint_url = "http://localhost:8080"
         ai_client.model_name = "gpt-4o"
         ai_client.api_key = None
 
-        resp = await client.post("/api/books/create", json={
-            "title": "Test Book",
-            "prompt": "A test book",
-        })
-        assert resp.status_code == 400
-        data = resp.json()
-        assert "API key" in data["detail"]
+        async def mock_list_models_fail(self):
+            raise Exception("API request failed with status 401: {\"detail\":\"Unauthorized\"}")
+
+        with patch.object(type(ai_client), "list_models", mock_list_models_fail):
+            resp = await client.post("/api/books/create", json={
+                "title": "Test Book",
+                "prompt": "A test book",
+            })
+            assert resp.status_code == 400
+            data = resp.json()
+            assert "credentials" in data["detail"].lower() or "invalid" in data["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_create_book_invalid_api_key(self, client):
