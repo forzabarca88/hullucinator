@@ -299,7 +299,6 @@ async function openDetail(bookId) {
 function closeModal() {
   $('detailOverlay').classList.remove('active');
   stopPolling();
-  bookTTS.stop();
   currentBookId = null;
 }
 
@@ -334,6 +333,7 @@ async function deleteBook(bookId, title) {
   if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
   try {
     await apiFetch('/books/' + bookId, { method: 'DELETE' });
+    await bookTTS.clearCache(bookId);
     toast('Book deleted.', 'success');
     closeModal();
     loadBooks();

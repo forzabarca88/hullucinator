@@ -70,6 +70,83 @@ class BookTTSManager {
     this._totalChapters = 0;
     this._onStatusChange = null;
     this._currentSource = null;
+    this._db = null;
+    this._sentencesDone = 0;
+    this._pendingCacheKey = null;
+  }
+
+  _getCacheKey(bookId, chapterIndex, sentenceIndex) {
+    return `audio:${bookId}:${chapterIndex}:${sentenceIndex}`;
+  }
+
+  async _openCache() {
+    if (this._db) return this._db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('hullucinator_tts_cache', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('audio')) {
+          db.createObjectStore('audio', { keyPath: 'key' });
+        }
+      };
+      req.onsuccess = () => { this._db = req.result; resolve(this._db); };
+      req.onerror = () => { console.warn('[TTS] IndexedDB unavailable'); resolve(null); };
+    });
+  }
+
+  async _getCached(bookId, chapterIndex, sentenceIndex) {
+    const db = await this._openCache();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction('audio', 'readonly');
+      const req = tx.objectStore('audio').get(this._getCacheKey(bookId, chapterIndex, sentenceIndex));
+      req.onsuccess = () => resolve(req.result?.wav ?? null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async _putCached(bookId, chapterIndex, sentenceIndex, wav) {
+    const db = await this._openCache();
+    if (!db) return;
+    try {
+      const tx = db.transaction('audio', 'readwrite');
+      tx.objectStore('audio').put({
+        key: this._getCacheKey(bookId, chapterIndex, sentenceIndex),
+        wav,
+      });
+    } catch (e) {
+      console.warn('[TTS] Cache write failed:', e);
+    }
+  }
+
+  async clearCache(bookId) {
+    const db = await this._openCache();
+    if (!db) return;
+    const prefix = `audio:${bookId}:`;
+    try {
+      const tx = db.transaction('audio', 'readwrite');
+      const store = tx.objectStore('audio');
+      const range = IDBKeyRange.bound(prefix, prefix + '\uffff');
+      const req = store.openCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          store.delete(cursor.primaryKey);
+          cursor.continue();
+        }
+      };
+    } catch (e) {
+      console.warn('[TTS] Cache clear failed:', e);
+    }
+  }
+
+  async _playCachedAudio(wavBuffer) {
+    return new Promise((resolve, reject) => {
+      this.audioContext.decodeAudioData(wavBuffer, (buffer) => {
+        this.audioQueue.push(buffer);
+        resolve();
+      }, reject);
+    });
   }
 
   async initialize() {
@@ -95,6 +172,7 @@ class BookTTSManager {
             this.worker.removeEventListener('message', onInit);
             clearTimeout(timeout);
             this.isInitialized = true;
+            this._openCache();
             this._setupWorkerListeners();
             resolve();
           } else if (e.data.type === 'initError') {
@@ -133,6 +211,11 @@ class BookTTSManager {
 
         this.audioContext.decodeAudioData(data.wav, (buffer) => {
           this.audioQueue.push(buffer);
+          // Cache the synthesized audio for future replay
+          if (this._pendingCacheKey) {
+            this._putCached(this.bookId, this._currentChapterIndex, this._sentencesDone - 1, data.wav);
+            this._pendingCacheKey = null;
+          }
           if (!this._isPlaying) {
             this._playNextInQueue();
           }
@@ -162,7 +245,13 @@ class BookTTSManager {
       if (!ok) return false;
     }
 
-    // Stop any current playback
+    // If already playing this exact chapter, don't reset — just continue
+    if (this._isPlaying && this.bookId === bookId && this._currentChapterIndex === chapterIndex) {
+      this.voice = voice;
+      return true;
+    }
+
+    // Stop playback when switching books or chapters
     this._stopPlayback();
 
     this.bookId = bookId;
@@ -178,6 +267,7 @@ class BookTTSManager {
 
     this._currentChapterIndex = chapter_index;
     this._totalChapters = total_chapters;
+    this._sentencesDone = 0;
     this._isPlaying = true;
 
     if (this._onStatusChange) {
@@ -209,12 +299,44 @@ class BookTTSManager {
     return true;
   }
 
-  _synthesizeNext() {
+  async _synthesizeNext() {
     if (this._workerBusy || this.sentenceQueue.length === 0) return;
 
     const sentence = this.sentenceQueue.shift();
+    const sentenceIdx = this._sentencesDone;
+    this._sentencesDone++;
+
+    // Check cache first — use cached audio without involving the worker
+    const cached = await this._getCached(this.bookId, this._currentChapterIndex, sentenceIdx);
+    if (cached) {
+      try {
+        await this._playCachedAudio(cached);
+        if (!this._isPlaying) {
+          this._playNextInQueue();
+        }
+        if (this._onStatusChange) {
+          this._onStatusChange(
+            `Playing cached... (${this.sentenceQueue.length} remaining)`,
+            this._currentChapterIndex,
+            this._totalChapters
+          );
+        }
+        // Save progress for cached sentence
+        if (this.bookId) {
+          this.saveProgress(this.bookId, this._currentChapterIndex, sentenceIdx + 1, this.voice);
+        }
+        this._synthesizeNext();
+        return;
+      } catch (e) {
+        console.warn('[TTS] Cache decode failed, synthesizing:', e);
+        // Fall through to synthesis
+      }
+    }
+
+    // Not cached — synthesize via worker
     this._workerBusy = true;
     this._activeId = ++this._activeId;
+    this._pendingCacheKey = this._getCacheKey(this.bookId, this._currentChapterIndex, sentenceIdx);
 
     this.worker.postMessage({
       type: 'generate',
@@ -256,12 +378,8 @@ class BookTTSManager {
     this._currentSource = source;
 
     source.onended = () => {
-      // Save progress after each sentence
-      const sentencesDone = this._totalChapters > 0
-        ? this._totalChapters - this.sentenceQueue.length - this.audioQueue.length
-        : 0;
       if (this.bookId) {
-        this.saveProgress(this.bookId, this._currentChapterIndex, sentencesDone, this.voice);
+        this.saveProgress(this.bookId, this._currentChapterIndex, this._sentencesDone, this.voice);
       }
       this._playNextInQueue();
     };
@@ -277,7 +395,42 @@ class BookTTSManager {
     // Auto-advance to next chapter if available
     if (this._currentChapterIndex + 1 < this._totalChapters) {
       this._currentChapterIndex++;
-      this._playNextInQueue();
+      this._sentencesDone = 0;
+      this._fetchChapter(this._currentChapterIndex);
+    }
+  }
+
+  async _fetchChapter(chapterIndex) {
+    try {
+      const resp = await fetch(`/api/books/${this.bookId}/tts-text?chapter=${chapterIndex}`);
+      if (!resp.ok) {
+        this._isPlaying = false;
+        if (this._onStatusChange) {
+          this._onStatusChange(`Error fetching chapter ${chapterIndex}`);
+        }
+        return;
+      }
+      const { title, text } = await resp.json();
+      if (this._onStatusChange) {
+        this._onStatusChange(`Playing: ${title}`, chapterIndex, this._totalChapters);
+      }
+      const plain = stripMarkdown(text);
+      const sentences = splitSentences(plain);
+      const maxChars = 5000;
+      const limited = [];
+      let accumulated = 0;
+      for (const s of sentences) {
+        if (accumulated + s.length > maxChars) break;
+        accumulated += s.length;
+        limited.push(s);
+      }
+      this.sentenceQueue = limited;
+      this._synthesizeNext();
+    } catch (e) {
+      this._isPlaying = false;
+      if (this._onStatusChange) {
+        this._onStatusChange(`Error: ${e.message}`);
+      }
     }
   }
 
@@ -287,6 +440,8 @@ class BookTTSManager {
     this.audioQueue = [];  // discard pending audio buffers
     this.sentenceQueue = []; // discard pending sentences
     this._activeId = 0;     // invalidate in-flight synthesis ids
+    this._sentencesDone = 0;
+    this._pendingCacheKey = null;
 
     // Stop any active AudioContext source
     if (this._currentSource) {
@@ -313,6 +468,12 @@ class BookTTSManager {
     }
     this.isInitialized = false;
     this._initFailed = false;
+    this._sentencesDone = 0;
+    this._pendingCacheKey = null;
+    if (this._db) {
+      this._db.close();
+      this._db = null;
+    }
   }
 
   saveProgress(bookId, chapterIndex, sentenceIndex, voice) {

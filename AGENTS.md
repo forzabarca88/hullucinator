@@ -30,6 +30,8 @@ COEP is set to `credentialless` to enable Cross-Origin Isolation, unlocking `Sha
 
 **TTS model lifecycle:** The worker keeps the Kokoro model loaded across `stop()` calls for instant replay. `init` is idempotent — repeated calls return `ready` immediately without reloading. The manager's `stop()` clears queues but preserves `isInitialized`. Only `destroy()` terminates the worker and releases WASM memory.
 
+**TTS audio cache:** Synthesized audio is stored in IndexedDB (`hullucinator_tts_cache`) keyed by `audio:{bookId}:{chapterIndex}:{sentenceIndex}`. Cache persists across page loads. `playChapter` checks cache before synthesizing. `clearCache(bookId)` purges all entries for a deleted book.
+
 ## Testing
 
 - **Never touch the real data directory during testing.** Tests must use `tmp_path` or `set_test_dirs(tmp_path)` to isolate from production data.
