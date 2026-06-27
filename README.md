@@ -1,5 +1,7 @@
 # Hullucinator — AI-Powered E-Book Generator
 
+> ⚠️ This was a personal project primarily implemented with generative AI. Please review code accordingly before re-use.
+
 Generate complete e-books from a simple prompt. Provide a title, topic, genre tags, and desired length — the system orchestrates an LLM to produce a polished book with professional review, then exports to EPUB or PDF.
 
 ## Features
