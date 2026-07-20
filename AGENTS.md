@@ -47,3 +47,7 @@ Config sub-models:
 - **New endpoints:** Define in the routes module under `/api/`. Use existing lookup and validation helpers.
 - **Web UI changes:** Follow the split-file structure (config → utilities → renderers → app → settings → bootstrap). Load shared config before initializing any component.
 - **Config changes:** All defaults flow from the shared config. Frontend and backend must stay in sync.
+
+## Book Resumption
+
+**Books interrupted by server shutdown automatically resume on restart.** The `lifespan` startup hook scans all stored books for non-terminal statuses (`pending`, `summary_generated`, `outline_generated`, `in_progress`, `reviewing`) and queues them for resume. Manual resume is available via `POST /api/books/{book_id}/resume`. Resume preserves all already-generated content (chapters, summaries, outline) and continues only from the point of interruption.

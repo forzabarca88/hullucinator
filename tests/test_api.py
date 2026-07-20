@@ -665,3 +665,168 @@ class TestRetryEndpoint:
             # Old book is deleted
             resp = await client.get(f"/api/books/{old_id}")
             assert resp.status_code == 404
+
+
+class TestResumeEndpoint:
+    """Test the POST /api/books/{id}/resume endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_resume_nonexistent_book(self, client):
+        """Resume on non-existent book returns 404."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            resp = await client.post("/api/books/nonexistent/resume")
+            assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_resume_terminal_status(self, client):
+        """Resume on terminal status (completed, reviewed, failed) returns 400."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book
+            resp = await client.post("/api/books/create", json={
+                "title": "Terminal Book",
+                "prompt": "A test book",
+                "length": "short_story",
+            })
+            assert resp.status_code == 200
+            book_id = resp.json()["book_id"]
+
+            # Set to completed status (terminal)
+            from app.storage import load_book, save_book
+            book = load_book(book_id)
+            book.status = "completed"
+            save_book(book_id, book)
+
+            # Try to resume — should fail
+            resp = await client.post(f"/api/books/{book_id}/resume")
+            assert resp.status_code == 400
+            assert "Cannot resume" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_resume_unconfigured(self, client):
+        """Resume fails when AI is not configured."""
+        ai_client.endpoint_url = ""
+        ai_client.model_name = ""
+
+        # Create a book in pending status directly
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="Resume Test",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.post(f"/api/books/{book_id}/resume")
+        assert resp.status_code == 400
+        assert "not configured" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_resume_in_progress(self, client):
+        """Resume a book stuck in in_progress status queues it for continuation."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book and simulate it being stuck in in_progress
+            from app.schemas import BookState
+            from app.storage import save_book
+            import uuid
+            book_id = str(uuid.uuid4())
+            book_state = BookState(
+                id=book_id,
+                title="Interrupted Book",
+                prompt="A book that was interrupted",
+                tags=["sci-fi"],
+                length="novella",
+                status="in_progress",
+                summary="A summary of the book",
+                outline=["Chapter 1: The Beginning", "Chapter 2: The Journey", "Chapter 3: The End"],
+                chapters={"Chapter 1: The Beginning": "Content of chapter 1"},
+                chapter_summaries={"Chapter 1: The Beginning": "Summary of chapter 1"},
+                progress={"current_step": "Writing Chapter 2...", "total_chapters": 3,
+                          "chapters_completed": 1, "percentage": 50},
+                review_max_turns=2,
+                skip_review=True,
+            )
+            save_book(book_id, book_state)
+
+            # Resume
+            resp = await client.post(f"/api/books/{book_id}/resume")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["book_id"] == book_id
+            assert data["resuming_from"] == "in_progress"
+
+            # Book should still be in in_progress status (task queued, not yet complete)
+            resp = await client.get(f"/api/books/{book_id}")
+            assert resp.status_code == 200
+            book = resp.json()
+            assert book["status"] == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_resume_preserves_generated_content(self, client):
+        """Resume preserves already-generated content (chapters, summaries)."""
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book with partial progress
+            from app.schemas import BookState
+            from app.storage import save_book
+            import uuid
+            book_id = str(uuid.uuid4())
+            book_state = BookState(
+                id=book_id,
+                title="Partial Book",
+                prompt="A book with partial progress",
+                tags=["fantasy"],
+                length="short_story",
+                status="in_progress",
+                summary="A fantasy adventure",
+                outline=["Chapter 1: The Call", "Chapter 2: The Quest"],
+                chapters={"Chapter 1: The Call": "Original chapter 1 content"},
+                chapter_summaries={"Chapter 1: The Call": "Original summary"},
+                progress={"current_step": "Writing Chapter 2...", "total_chapters": 2,
+                          "chapters_completed": 1, "percentage": 60},
+                review_max_turns=2,
+                skip_review=True,
+            )
+            save_book(book_id, book_state)
+
+            # Resume
+            resp = await client.post(f"/api/books/{book_id}/resume")
+            assert resp.status_code == 200
+
+            # Verify the book still exists and has the original chapter preserved
+            resp = await client.get(f"/api/books/{book_id}")
+            assert resp.status_code == 200
+            book = resp.json()
+            # Chapter 1 content should be preserved (resume doesn't regenerate existing chapters)
+            assert "Chapter 1: The Call" in book["chapters"]
+            assert book["chapters"]["Chapter 1: The Call"] == "Original chapter 1 content"

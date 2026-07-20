@@ -278,6 +278,109 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
     logger.info("All %d chapters generated for '%s' (%s)", total, book.title, book.id)
 
 
+async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
+    """Resume chapter generation for a book stuck in 'in_progress' status.
+
+    Finds chapters from the outline that haven't been generated yet
+    and generates only those, preserving already-completed work.
+    """
+    if book.status != "in_progress":
+        raise ValueError(f"Cannot resume chapters: book is '{book.status}', expected 'in_progress'")
+
+    chapter_titles = book.outline
+    if not chapter_titles:
+        raise ValueError("No chapters found in outline")
+
+    # Find chapters that haven't been generated yet
+    existing_chapters = set(book.chapters.keys()) if book.chapters else set()
+    existing_summaries = set(book.chapter_summaries.keys()) if book.chapter_summaries else set()
+    remaining = [t for t in chapter_titles if t not in existing_chapters]
+
+    if not remaining:
+        # All chapters already generated — just transition to completed
+        logger.info("Book '%s' (%s): all chapters already generated, marking completed", book.title, book.id)
+        _transition(book, "completed")
+        total = len(chapter_titles)
+        _update_progress(book, "All chapters generated", total_chapters=total, chapters_completed=total, percentage=70)
+        save_book(book.id, book)
+        return
+
+    tags_str = ", ".join(book.tags) if book.tags else "no specific genre"
+    word_guidance = LENGTH_WORD_COUNT.get(book.length, "2,500-4,000")
+    total = len(chapter_titles)
+    already_done = len(chapter_titles) - len(remaining)
+
+    _transition(book, "in_progress")  # self-transition to confirm resume
+    _update_progress(book, f"Resuming chapter generation ({len(remaining)} remaining)",
+                     total_chapters=total, chapters_completed=already_done,
+                     percentage=40 + int(already_done / total * 30))
+    save_book(book.id, book)
+
+    logger.info("Resuming chapter generation for '%s' (%s): %d/%d chapters done, %d remaining",
+                book.title, book.id, already_done, total, len(remaining))
+
+    for i, title in enumerate(remaining):
+        chapter_num = already_done + i + 1
+
+        # Build cumulative context from all existing chapters
+        context_parts = [
+            f"Book: {book.title}\n",
+            f"Genre: {tags_str}\n",
+            f"Book Summary:\n{book.summary}\n\n",
+            f"Full Outline:\n{book.outline}\n\n",
+        ]
+
+        # Add summaries of all previously generated chapters
+        if book.chapter_summaries:
+            context_parts.append("Previous Chapter Summaries:\n")
+            for prev_title, summary in book.chapter_summaries.items():
+                context_parts.append(f"- {prev_title}: {summary}\n")
+            context_parts.append("\n")
+
+        messages = [
+            {"role": "system", "content": (
+                _gen_config.chapter_system_prompt.format(
+                    chapter_num=chapter_num, length=book.length, tags=tags_str, word_count=word_guidance
+                )
+            )},
+            {"role": "user", "content": (
+                "".join(context_parts) +
+                f"Now write: {title}\n\n"
+                f"Continue the story naturally from the previous chapters. "
+                f"Maintain consistent tone, character voices, and narrative pacing. "
+                f"Target word count for this chapter: {word_guidance}.\n\n"
+                f"Return ONLY the chapter content as plain text, starting directly with the narrative."
+            )},
+        ]
+
+        _update_progress(book, f"Writing {title}...", total_chapters=total, chapters_completed=already_done + i,
+                         percentage=40 + int((already_done + i) / total * 30))
+        save_book(book.id, book)
+
+        response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_temperature)
+        chapter_content = _extract_content(response)
+        chapter_content = _unwrap_json_content(chapter_content)
+
+        if not chapter_content or len(chapter_content.strip()) < _gen_config.min_chapter_chars:
+            raise ValueError(f"Chapter '{title}' generation produced insufficient content")
+
+        book.chapters[title] = chapter_content
+        book.chapter_summaries[title] = await _summarize_chapter(ai_client, chapter_content, title)
+
+        _update_progress(book, f"Completed {title}", total_chapters=total, chapters_completed=already_done + i + 1,
+                         percentage=40 + int((already_done + i + 1) / total * 30))
+        save_book(book.id, book)
+
+        logger.info("Chapter %d/%d '%s' generated (%d chars) [resumed]",
+                     chapter_num, total, title, len(chapter_content))
+
+    _transition(book, "completed")
+    _update_progress(book, "All chapters generated", total_chapters=total, chapters_completed=total, percentage=70)
+    save_book(book.id, book)
+
+    logger.info("All %d chapters generated for '%s' (%s) [resumed]", total, book.title, book.id)
+
+
 async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_title: str) -> str:
     """
     Generate a concise one-paragraph summary of a chapter.

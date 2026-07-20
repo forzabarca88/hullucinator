@@ -30,6 +30,7 @@ from app.config import get_default_shared_config
 # Re-export from status module
 from app.status import (
     VALID_TRANSITIONS,
+    RESUMABLE_STATUSES,
     _transition,
     is_terminal_status,
     get_allowed_transitions,
@@ -40,6 +41,7 @@ from app.generation import (
     generate_summary as _gen_generate_summary,
     generate_outline as _gen_generate_outline,
     generate_chapters as _gen_generate_chapters,
+    resume_chapters as _gen_resume_chapters,
     _update_progress,
     _summarize_chapter,
     _parse_chapter_range,
@@ -124,6 +126,44 @@ class Orchestrator:
         """
         reviewer = self._get_reviewer()
         await _review_book(self.ai_client, book_state, reviewer_client=reviewer)
+
+    # ── Resume method ─────────────────────────────────────────────
+
+    async def resume_book(self, book_state: BookState) -> None:
+        """
+        Resume generation from the book's current status.
+
+        Continues the pipeline from wherever it left off:
+        - pending → full pipeline (summary → outline → chapters → review)
+        - summary_generated → outline → chapters → review
+        - outline_generated → chapters → review
+        - in_progress → resume remaining chapters → review
+        - reviewing → continue review
+        """
+        status = book_state.status
+
+        if status == "pending":
+            await self.generate_summary(book_state)
+            await self.generate_outline(book_state)
+            await self.generate_chapters(book_state)
+        elif status == "summary_generated":
+            await self.generate_outline(book_state)
+            await self.generate_chapters(book_state)
+        elif status == "outline_generated":
+            await self.generate_chapters(book_state)
+        elif status == "in_progress":
+            await _gen_resume_chapters(self.ai_client, book_state)
+        elif status == "reviewing":
+            pass  # review_book handles the transition from reviewing → reviewed
+        else:
+            raise ValueError(f"Cannot resume book in '{status}' status")
+
+        # Auto-trigger review after chapters are complete (unless skipped)
+        if book_state.status == "completed" and not book_state.skip_review:
+            await self.review_book(book_state, max_turns=book_state.review_max_turns)
+            logger.info("Book '%s' (%s) generation + review completed [resumed]", book_state.title, book_state.id)
+        elif book_state.status == "completed":
+            logger.info("Book '%s' (%s) generation completed, review skipped [resumed]", book_state.title, book_state.id)
 
     # ── Delegated validation ──────────────────────────────────────
 

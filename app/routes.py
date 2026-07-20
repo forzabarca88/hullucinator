@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from app.ai_client import AIClient, ReviewerClient, _parse_models_response, _build_api_url
 from app.orchestrator import Orchestrator
 from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
+from app.status import RESUMABLE_STATUSES
 from app.exporter import export_to_epub, export_to_pdf
 from app.config import get_default_shared_config
 from app.logging import log_error_with_trace
@@ -650,6 +651,75 @@ def create_router(
             "old_book_id": book_id,
             "review_max_turns": request.review_max_turns,
             "skip_review": request.skip_review,
+        }
+
+    # ── Resume Book ──────────────────────────────────────────────────────
+
+    @router.post("/api/books/{book_id}/resume")
+    async def resume_book_endpoint(book_id: str, background_tasks: BackgroundTasks):
+        """
+        Resume generation of a book that was interrupted (e.g., server restart).
+
+        Works for books in non-terminal statuses: pending, summary_generated,
+        outline_generated, in_progress, reviewing.
+
+        Continues the pipeline from wherever it left off, skipping already-
+        completed steps. For 'in_progress' books, only generates remaining
+        chapters. For 'reviewing' books, continues the review pipeline.
+
+        Validates API credentials before queuing.
+        """
+        await check_configured_and_connected()
+
+        book_state = load_book(book_id)
+        if not book_state:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        if book_state.status not in RESUMABLE_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot resume: book is in '{book_state.status}' status. "
+                       f"Only resumable statuses: {', '.join(RESUMABLE_STATUSES)}.",
+            )
+
+        # Cancel any existing task for this book
+        task = active_tasks.pop(book_id, None)
+        if task and not task.done():
+            task.cancel()
+            logger.info("Cancelled existing task for book '%s' (%s) before resume", book_state.title, book_id)
+
+        async def _semaphore_task():
+            async with await get_semaphore():
+                try:
+                    # Reload to get latest state from disk
+                    book = load_book(book_id)
+                    if not book:
+                        return
+                    await orchestrator.resume_book(book)
+                    logger.info("Book '%s' (%s) generation resumed successfully", book.title, book_id)
+                except Exception as e:
+                    tb = log_error_with_trace(
+                        "Resume failed for book %s: %s", book_id, e,
+                        exc=e, logger_obj=logger,
+                    )
+                    book = load_book(book_id)
+                    if book:
+                        book.status = "failed"
+                        book.metadata = {"error": str(e), "traceback": tb}
+                        book.progress["current_step"] = "resume_failed"
+                        book.progress["error"] = str(e)
+                        save_book(book_id, book)
+
+        task = asyncio.create_task(_semaphore_task())
+        active_tasks[book_id] = task
+
+        logger.info("Book '%s' (%s) queued for resume from '%s' status",
+                    book_state.title, book_id, book_state.status)
+        return {
+            "book_id": book_id,
+            "status": book_state.status,
+            "resuming_from": book_state.status,
+            "message": f"Resuming from '{book_state.status}'",
         }
 
     # ── Delete Book ─────────────────────────────────────────────────────

@@ -17,6 +17,8 @@ Generate complete e-books from a simple prompt. Provide a title, topic, genre ta
 - **Model discovery** — Fetch available models from your LLM provider
 - **Rich exports** — EPUB with CSS styling, TOC, drop caps, and review metadata; PDF with configurable fonts
 - **Live progress tracking** — Real-time progress bar with chapter-by-chapter updates
+- **Auto-resume on restart** — Books interrupted by server shutdown automatically resume from where they left off
+- **Manual resume** — Resume interrupted books from the UI, preserving all already-generated content
 
 ## Quick Start
 
@@ -110,10 +112,11 @@ Once a book is complete (or reviewed), download it in your preferred format:
 - **EPUB** — Rich formatting, table of contents, drop caps, genre metadata, and review info
 - **PDF** — Clean formatting with configurable fonts
 
-### Delete & Retry
+### Delete, Retry & Resume
 
 - **Delete** — Hover over a book card to reveal the 🗑 button, or use the delete button in the detail modal. Confirmation is required.
-- **Retry** — Restart generation for failed books; the old failed entry is automatically removed.
+- **Retry** — Restart generation for failed books from scratch; the old failed entry is automatically removed.
+- **Resume** — Continue generation from where it left off, preserving all already-generated content (chapters, summaries, outline). Works for books interrupted by server shutdown or any other failure. Auto-resume triggers on server restart; manual resume is available from the book detail view.
 
 ## Settings
 

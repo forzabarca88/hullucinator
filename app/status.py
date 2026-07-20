@@ -14,12 +14,15 @@ VALID_TRANSITIONS: Dict[str, List[str]] = {
     "pending": ["summary_generated", "failed"],
     "summary_generated": ["outline_generated", "failed"],
     "outline_generated": ["in_progress", "failed"],
-    "in_progress": ["completed", "failed"],
+    "in_progress": ["completed", "failed", "in_progress"],  # self-transition for resume
     "completed": ["reviewing", "failed"],
-    "reviewing": ["reviewed", "failed"],
+    "reviewing": ["reviewed", "failed", "reviewing"],  # self-transition for resume
     "reviewed": ["failed"],
     "failed": ["pending"],  # allow retry
 }
+
+# Non-terminal statuses that can be resumed (server restart or manual trigger)
+RESUMABLE_STATUSES: List[str] = ["pending", "summary_generated", "outline_generated", "in_progress", "reviewing"]
 
 
 def _transition(book: BookState, new_status: str) -> None:
