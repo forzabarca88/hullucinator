@@ -23,6 +23,8 @@ from app.logging import log_error_with_trace
 from app.middleware import setup_middleware
 from app.routes import create_router
 from app.schemas import AIConfig
+from app.storage import list_books
+from app.status import RESUMABLE_STATUSES
 from app.ai_client import AIClient, ReviewerClient
 from app.orchestrator import Orchestrator
 from app.storage import load_config
@@ -168,10 +170,57 @@ def _check_endpoint(endpoint_url: str | None = None):
 
 # ── Lifespan ────────────────────────────────────────────────────────────
 
+async def _resume_stuck_books() -> None:
+    """Scan for books stuck in non-terminal statuses and queue them for resume."""
+    books = list_books()
+    stuck = [b for b in books if b.status in RESUMABLE_STATUSES]
+
+    if not stuck:
+        return
+
+    logger.info("Found %d book(s) stuck in non-terminal status, queuing for resume...", len(stuck))
+
+    for book in stuck:
+        logger.info("Auto-resuming book '%s' (%s) from '%s' status",
+                    book.title, book.id, book.status)
+
+        async def _semaphore_task(book_id=book.id):
+            async with await _get_semaphore():
+                try:
+                    from app.storage import load_book as _load_book
+                    from app.logging import log_error_with_trace as _log_error
+                    bstate = _load_book(book_id)
+                    if not bstate:
+                        return
+                    await orchestrator.resume_book(bstate)
+                    logger.info("Book '%s' (%s) auto-resumed successfully", bstate.title, book_id)
+                except Exception as e:
+                    _log_error(
+                        "Auto-resume failed for book %s: %s", book_id, e,
+                        exc=e, logger_obj=logger,
+                    )
+                    bstate = _load_book(book_id)
+                    if bstate:
+                        bstate.status = "failed"
+                        bstate.metadata = {"error": str(e), "traceback": None}
+                        bstate.progress["current_step"] = "resume_failed"
+                        bstate.progress["error"] = str(e)
+                        from app.storage import save_book as _save_book
+                        _save_book(book_id, bstate)
+
+        task = asyncio.create_task(_semaphore_task())
+        _active_tasks[book.id] = task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Hullucinator starting up (configured=%s)...", configured)
+
+    # Auto-resume any books stuck from a previous session
+    if configured:
+        await _resume_stuck_books()
+
     yield
     # Shutdown: close HTTP client
     await ai_client.close()

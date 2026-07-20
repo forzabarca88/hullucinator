@@ -1,4 +1,5 @@
 """Tests for orchestrator parsing and matching logic (L9)."""
+import asyncio
 import pytest
 
 from app.orchestrator import Orchestrator, _transition
@@ -172,3 +173,108 @@ class TestTransition:
         book = BookState(id="test-1", title="Test", prompt="A test", status="pending")
         with pytest.raises(ValueError, match="Invalid status transition"):
             _transition(book, "completed")
+
+    def test_in_progress_self_transition(self):
+        """in_progress → in_progress is allowed for resume."""
+        from app.schemas import BookState
+        book = BookState(id="test-1", title="Test", prompt="A test", status="in_progress")
+        _transition(book, "in_progress")
+        assert book.status == "in_progress"
+
+    def test_reviewing_self_transition(self):
+        """reviewing → reviewing is allowed for resume."""
+        from app.schemas import BookState
+        book = BookState(id="test-1", title="Test", prompt="A test", status="reviewing")
+        _transition(book, "reviewing")
+        assert book.status == "reviewing"
+
+    def test_reviewed_can_fail(self):
+        """reviewed status can still transition to failed (not truly terminal)."""
+        from app.status import get_allowed_transitions, is_terminal_status
+        # reviewed has a transition to failed, so it's not terminal by is_terminal_status
+        assert is_terminal_status("reviewed") is False
+        assert "failed" in get_allowed_transitions("reviewed")
+
+    def test_resumable_statuses(self):
+        """Non-terminal statuses are resumable."""
+        from app.status import RESUMABLE_STATUSES
+        assert "pending" in RESUMABLE_STATUSES
+        assert "summary_generated" in RESUMABLE_STATUSES
+        assert "outline_generated" in RESUMABLE_STATUSES
+        assert "in_progress" in RESUMABLE_STATUSES
+        assert "reviewing" in RESUMABLE_STATUSES
+        # Terminal statuses should NOT be resumable
+        assert "completed" not in RESUMABLE_STATUSES
+        assert "reviewed" not in RESUMABLE_STATUSES
+        assert "failed" not in RESUMABLE_STATUSES
+
+
+class TestResumeChapters:
+    """Test resume_chapters generation logic."""
+
+    def test_resume_chapters_wrong_status(self):
+        """resume_chapters rejects books not in in_progress status."""
+        from app.generation import resume_chapters
+        from app.schemas import BookState
+        book = BookState(id="test-1", title="Test", prompt="A test", status="pending")
+        with pytest.raises(ValueError, match="expected 'in_progress'"):
+            asyncio.run(resume_chapters(None, book))
+
+    def test_resume_chapters_all_done(self):
+        """resume_chapters transitions to completed when all chapters exist."""
+        from app.generation import resume_chapters
+        from app.schemas import BookState
+        from app.storage import set_test_dirs, reset_to_defaults
+        from pathlib import Path
+
+        tmp = Path("/tmp/test_resume_all_done")
+        set_test_dirs(tmp)
+        try:
+            book = BookState(
+                id="test-1", title="Test", prompt="A test", status="in_progress",
+                summary="A summary", outline=["Ch 1", "Ch 2"],
+                chapters={"Ch 1": "content1", "Ch 2": "content2"},
+                chapter_summaries={"Ch 1": "sum1", "Ch 2": "sum2"},
+            )
+            asyncio.run(resume_chapters(None, book))
+            assert book.status == "completed"
+        finally:
+            reset_to_defaults()
+
+    def test_resume_chapters_finds_remaining(self):
+        """resume_chapters correctly identifies missing chapters."""
+        from app.generation import resume_chapters
+        from app.schemas import BookState
+        from app.storage import set_test_dirs, reset_to_defaults
+        from pathlib import Path
+        from unittest.mock import AsyncMock
+
+        tmp = Path("/tmp/test_resume_remaining")
+        set_test_dirs(tmp)
+        try:
+            book = BookState(
+                id="test-1", title="Test", prompt="A test", status="in_progress",
+                summary="A summary", outline=["Ch 1", "Ch 2", "Ch 3"],
+                chapters={"Ch 1": "content1"},
+                chapter_summaries={"Ch 1": "sum1"},
+                length="short_story",
+            )
+
+            # Mock AI client — generate_completion returns a real dict (not MagicMock)
+            # _extract_content uses .get() which doesn't work on MagicMock
+            mock_client = AsyncMock()
+            long_content = "This is a properly sized chapter with enough content to pass validation. " * 5
+            mock_response = {
+                "choices": [{"message": {"content": long_content}}],
+            }
+            mock_client.generate_completion = AsyncMock(return_value=mock_response)
+
+            asyncio.run(resume_chapters(mock_client, book))
+
+            assert book.status == "completed"
+            assert "Ch 2" in book.chapters
+            assert "Ch 3" in book.chapters
+            # Ch 1 should be preserved (not regenerated)
+            assert book.chapters["Ch 1"] == "content1"
+        finally:
+            reset_to_defaults()
