@@ -132,6 +132,8 @@ Books in `completed` or `reviewed` status can be exported in two formats:
 
 Exported files are stored persistently and served for download.
 
+An `Assign Book Cover` button allows the user to add a image file for a given book - this image should be appropriately processed such that the exported book uses the assigned cover.
+ 
 ---
 
 ## 5. Web Interface
@@ -158,6 +160,7 @@ Credentials are validated before saving. On success, the wizard dismisses and th
 ### Library
 
 Displays all books as cards showing:
+- The image cover (if assigned)
 - Title, status badge (color-coded), length tier, genre tags
 - Prompt preview (truncated)
 - Progress bar with percentage (color: teal during generation, green on completion, red on failure)
@@ -178,6 +181,7 @@ Clicking a book card opens a modal with:
 - **Review Results** (if reviewed) — Score display (color-coded: green/amber/red), verdict (Approved/Needs Revision), max-turns-reached warning, and expandable turn-by-turn history showing critique text, issues found, and corrections applied
 
 **Action Buttons:**
+- Assign Book Cover
 - Download EPUB / Download PDF (available for completed or reviewed books)
 - Trigger Review (available for completed books)
 - Retry (available for failed, completed, or reviewed books)
