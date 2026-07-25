@@ -39,7 +39,7 @@ Config sub-models:
 - `ConcurrencyConfig` — max simultaneous generations
 - `ValidationConfig` — validation thresholds
 - `UISchema` — polling intervals, input limits
-- `ToolConfig` — web grounding toggle (Wikipedia + web search during generation)
+- `ToolConfig` — web grounding toggle, tool retry count and delay (Wikipedia + web search during generation)
 
 ## Extending the System
 
@@ -67,7 +67,9 @@ Config sub-models:
 
 **Shared module architecture.** `_is_web_grounding_enabled()` and `_generate_with_optional_tools()` live in `app/web_grounding.py` and are imported by both `generation.py` and `review.py`. The `WebGroundingClient` protocol type (in `web_grounding.py`) provides consistent typing for clients that support tool calling.
 
-**Persistent HTTP client.** Tool calls (Wikipedia, web search) use a module-level persistent `httpx.AsyncClient` in `app/tools.py` to avoid connection overhead per call. The client is closed during application shutdown via `close_tool_client()`.
+**Persistent HTTP client with User-Agent.** Tool calls use a module-level persistent `httpx.AsyncClient` in `app/tools.py` with a `User-Agent` header. Both Wikipedia and DuckDuckGo APIs reject requests without a proper User-Agent, returning 403/202 respectively. The client is closed during application shutdown via `close_tool_client()`.
+
+**Tool call retries.** Both Wikipedia and web search tools retry on transient failures (connection errors, timeouts, 5xx server errors) up to `ToolConfig.max_retries` times (default 3) with exponential backoff and jitter. Non-transient errors (404, 403, 400) are not retried. Retry delay and jitter are configured via `ToolConfig.retry_delay` and `ClientConfig.jitter_factor`.
 
 ## Tool Calling
 

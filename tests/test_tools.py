@@ -1,7 +1,10 @@
 """Tests for tool calling infrastructure (app/tools.py and app/ai_client.py tool support)."""
+import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+
+import httpx
 
 from app.tools import (
     get_available_tools,
@@ -13,6 +16,11 @@ from app.tools import (
     get_tool_client,
     WIKIPEDIA_SEARCH,
     WEB_SEARCH,
+    _is_retryable_error,
+    _with_retry,
+    _compute_delay,
+    _wikipedia_search_impl,
+    _web_search_impl,
 )
 from app.ai_client import AIClient, ReviewerClient
 
@@ -231,31 +239,9 @@ class TestWikipediaSearch:
     """Test wikipedia_search implementation."""
 
     @pytest.mark.asyncio
-    async def test_success_response(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "title": "Python",
-            "description": "Programming language",
-            "extract": "Python is a high-level programming language.",
-        }
-
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        with patch("app.tools.get_tool_client", return_value=mock_client):
-            result = await wikipedia_search("Python")
-            assert "Python" in result
-            assert "Programming language" in result
-            assert "high-level" in result
-
-    @pytest.mark.asyncio
-    async def test_404_fallback_to_search(self):
-        direct_response = MagicMock()
-        direct_response.status_code = 404
-        direct_response.raise_for_status = MagicMock(side_effect=Exception("404"))
-
+    async def test_success_via_rest_title(self):
+        """Happy path: search finds page, REST summary by title succeeds."""
+        # Call 1: search endpoint
         search_response = MagicMock()
         search_response.status_code = 200
         search_response.raise_for_status = MagicMock()
@@ -265,6 +251,7 @@ class TestWikipediaSearch:
             },
         }
 
+        # Call 2: REST summary by title (succeeds)
         summary_response = MagicMock()
         summary_response.status_code = 200
         summary_response.raise_for_status = MagicMock()
@@ -275,11 +262,112 @@ class TestWikipediaSearch:
         }
 
         mock_client = MagicMock()
-        mock_client.get.side_effect = [direct_response, search_response, summary_response]
+        mock_client.get = AsyncMock(side_effect=[search_response, summary_response])
 
         with patch("app.tools.get_tool_client", return_value=mock_client):
             result = await wikipedia_search("Python")
             assert "Python" in result
+            assert "Programming language" in result
+            assert "high-level" in result
+            assert mock_client.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_pageid_then_extracts(self):
+        """REST summary by title returns 404, pageid also 404, falls back to extracts."""
+        # Call 1: search endpoint
+        search_response = MagicMock()
+        search_response.status_code = 200
+        search_response.raise_for_status = MagicMock()
+        search_response.json.return_value = {
+            "query": {
+                "search": [{"pageid": 99999, "title": "New Topic"}],
+            },
+        }
+
+        # Call 2: REST summary by title (404)
+        title_404 = MagicMock()
+        title_404.status_code = 404
+
+        # Call 3: REST summary by pageid (404)
+        pageid_404 = MagicMock()
+        pageid_404.status_code = 404
+
+        # Call 4: action=query extracts fallback
+        extract_response = MagicMock()
+        extract_response.status_code = 200
+        extract_response.raise_for_status = MagicMock()
+        extract_response.json.return_value = {
+            "query": {
+                "pages": {
+                    "99999": {
+                        "pageid": 99999,
+                        "title": "New Topic",
+                        "extract": "<p><b>New Topic</b> is something important.</p>",
+                    },
+                },
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=[search_response, title_404, pageid_404, extract_response])
+
+        with patch("app.tools.get_tool_client", return_value=mock_client):
+            result = await wikipedia_search("New Topic")
+            assert "New Topic" in result
+            assert "something important" in result
+            assert "<" not in result  # HTML tags stripped
+            assert mock_client.get.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_no_results_found(self):
+        """Search returns no results."""
+        search_response = MagicMock()
+        search_response.status_code = 200
+        search_response.raise_for_status = MagicMock()
+        search_response.json.return_value = {
+            "query": {
+                "search": [],
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=search_response)
+
+        with patch("app.tools.get_tool_client", return_value=mock_client):
+            result = await wikipedia_search("xyznonexistent123")
+            assert "No Wikipedia results found" in result
+
+    @pytest.mark.asyncio
+    async def test_search_http_error(self):
+        """Search endpoint returns HTTP error."""
+        search_response = MagicMock()
+        search_response.status_code = 500
+        search_response.raise_for_status = MagicMock(
+            side_effect=Exception("500 Internal Server Error")
+        )
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=search_response)
+
+        with patch("app.tools.get_tool_client", return_value=mock_client):
+            result = await wikipedia_search("test")
+            assert "Error searching Wikipedia" in result
+
+    @pytest.mark.asyncio
+    async def test_strip_html(self):
+        """_strip_html removes tags and preserves paragraph breaks."""
+        from app.tools import _strip_html
+
+        result = _strip_html("<p><b>Bold</b> text</p><p>Second paragraph</p>")
+        assert "Bold" in result
+        assert "text" in result
+        assert "Second paragraph" in result
+        assert "<" not in result
+
+        # Multiple blank lines collapsed
+        result2 = _strip_html("<p>One</p><p>Two</p><p>Three</p>")
+        lines = [l for l in result2.split("\n") if l.strip()]
+        assert len(lines) == 3
 
 
 class TestWebSearch:
@@ -516,3 +604,168 @@ class TestReviewerClientToolSupport:
                 tools=tools,
             )
             assert main._client.post.call_count == 1
+
+
+class TestRetryLogic:
+    """Test retry helpers for tool calls."""
+
+    def test_is_retryable_connection_error(self):
+        assert _is_retryable_error(httpx.ConnectError("")) is True
+        assert _is_retryable_error(httpx.ConnectTimeout("")) is True
+        assert _is_retryable_error(httpx.NetworkError("")) is True
+
+    def test_is_retryable_timeout(self):
+        assert _is_retryable_error(httpx.ReadTimeout("")) is True
+        assert _is_retryable_error(httpx.PoolTimeout("")) is True
+
+    def test_is_retryable_5xx(self):
+        for code in [500, 502, 503, 504]:
+            resp = MagicMock()
+            resp.status_code = code
+            assert _is_retryable_error(httpx.HTTPStatusError("", request=MagicMock(), response=resp)) is True
+
+    def test_is_not_retryable_4xx(self):
+        for code in [400, 401, 403, 404, 429]:
+            resp = MagicMock()
+            resp.status_code = code
+            assert _is_retryable_error(httpx.HTTPStatusError("", request=MagicMock(), response=resp)) is False
+
+    def test_is_not_retryable_generic(self):
+        assert _is_retryable_error(ValueError("bad")) is False
+        assert _is_retryable_error(RuntimeError("fail")) is False
+
+    def test_compute_delay(self):
+        # Delays increase with attempt number (exponential backoff + jitter)
+        d1 = _compute_delay(1)
+        d2 = _compute_delay(2)
+        d3 = _compute_delay(3)
+        assert d1 >= 1.0  # base delay
+        assert d2 >= 2.0  # 2x base
+        assert d3 >= 4.0  # 4x base
+
+    @pytest.mark.asyncio
+    async def test_with_retry_success_first_try(self):
+        """No retry needed when function succeeds."""
+        async def fn():
+            return "ok"
+
+        result = await _with_retry(fn)
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_with_retry_transient_failure(self):
+        """Retries on transient errors, succeeds eventually."""
+        call_count = 0
+        async def flaky_fn():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise httpx.ConnectError("network down")
+            return "recovered"
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await _with_retry(flaky_fn)
+            assert result == "recovered"
+            assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_with_retry_non_retryable_error(self):
+        """Does NOT retry on non-retryable errors."""
+        call_count = 0
+        async def bad_fn():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("bad input")
+
+        with pytest.raises(ValueError):
+            await _with_retry(bad_fn)
+        assert call_count == 1  # Only called once, no retry
+
+    @pytest.mark.asyncio
+    async def test_with_retry_exhausted(self):
+        """Gives up after max retries on persistent transient error."""
+        call_count = 0
+        async def always_fail():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.ConnectError("permanent failure")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(httpx.ConnectError):
+                await _with_retry(always_fail)
+        # Called max_retries times (default 3)
+        from app.config import get_default_shared_config
+        max_retries = get_default_shared_config().tools.max_retries
+        assert call_count == max_retries
+
+    @pytest.mark.asyncio
+    async def test_wikipedia_search_retries_on_transient(self):
+        """wikipedia_search retries on connection failure, succeeds."""
+        call_count = 0
+
+        # Search response (returned by w/api.php)
+        search_response = MagicMock()
+        search_response.status_code = 200
+        search_response.raise_for_status = MagicMock()
+        search_response.json.return_value = {
+            "query": {"search": [{"pageid": 1, "title": "Test"}]},
+        }
+
+        # Summary response (returned by rest_v1/page/summary/*)
+        summary_response = MagicMock()
+        summary_response.status_code = 200
+        summary_response.raise_for_status = MagicMock()
+        summary_response.json.return_value = {
+            "title": "Test",
+            "description": "A test topic",
+            "extract": "This is the test extract.",
+        }
+
+        async def smart_get(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise httpx.ConnectError("down")
+            # After retries exhausted, return appropriate response per URL
+            if "w/api.php" in url:
+                return search_response
+            return summary_response
+
+        mock_client = MagicMock()
+        mock_client.get = smart_get
+
+        with patch("app.tools.get_tool_client", return_value=mock_client), \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await wikipedia_search("Test")
+            assert "Test" in result
+            assert "A test topic" in result
+            # 2 failed search attempts + 1 successful search + 1 summary = 4 calls
+            assert call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_web_search_retries_on_transient(self):
+        """web_search retries on timeout, succeeds."""
+        call_count = 0
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "Abstract": "Found it!",
+            "AbstractURL": "https://example.com",
+        }
+
+        async def flaky_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise httpx.ReadTimeout("timeout")
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = flaky_get
+
+        with patch("app.tools.get_tool_client", return_value=mock_client), \
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await web_search("Test")
+            assert "Found it!" in result
+            assert call_count == 2  # Failed once, succeeded on 2nd

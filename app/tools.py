@@ -8,9 +8,12 @@ information during generation or review.
 Uses a persistent httpx.AsyncClient at module level to avoid creating
 a new connection per tool call. Timeout is configurable via shared config.
 """
+import asyncio
 import json
 import logging
-from typing import Any, Dict, List
+import random
+import re
+from typing import Any, Callable, Dict, List, TypeVar
 
 import httpx
 
@@ -18,13 +21,22 @@ from app.config import get_default_shared_config
 
 logger = logging.getLogger(__name__)
 
-# Shared config for tool call timeout
-_tool_config = get_default_shared_config().client
+# Shared config
+_shared_config = get_default_shared_config()
+_tool_config = _shared_config.tools
+_client_config = _shared_config.client
+
+# Retry settings from tool config
+_TOOL_MAX_RETRIES = _tool_config.max_retries
+_TOOL_RETRY_DELAY = _tool_config.retry_delay
+_CLIENT_JITTER = _client_config.jitter_factor
 
 # Persistent HTTP client for tool calls (Wikipedia, DuckDuckGo, etc.)
 # Reused across all tool executions to avoid connection overhead.
+# User-Agent header is required by Wikipedia and DuckDuckGo APIs.
 _tool_client: httpx.AsyncClient = httpx.AsyncClient(
-    timeout=float(_tool_config.http_timeout)
+    timeout=float(_client_config.http_timeout),
+    headers={"User-Agent": "Hullucinator/1.0 (ebook generator)"},
 )
 
 
@@ -53,6 +65,72 @@ def close_tool_client() -> None:
 def get_tool_client() -> httpx.AsyncClient:
     """Return the persistent tool call HTTP client."""
     return _tool_client
+
+
+T = TypeVar("T")
+
+# Errors that indicate transient failures worth retrying
+_RETRYABLE_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.PoolTimeout,
+    httpx.NetworkError,
+)
+
+# HTTP status codes that indicate transient server errors
+_RETRYABLE_STATUS = (500, 502, 503, 504)
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Check if an exception represents a transient failure worth retrying."""
+    if isinstance(exc, _RETRYABLE_ERRORS):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS
+    return False
+
+
+def _compute_delay(attempt: int) -> float:
+    """Compute retry delay with exponential backoff and jitter."""
+    base = _TOOL_RETRY_DELAY * (2 ** (attempt - 1))
+    jitter = random.uniform(0, base * _CLIENT_JITTER)
+    return base + jitter
+
+
+async def _with_retry(fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """
+    Execute an async function with retries on transient failures.
+
+    Retries up to _TOOL_MAX_RETRIES times with exponential backoff and jitter.
+    Only retries on transient errors (connection failures, timeouts, 5xx).
+    Does NOT retry on 4xx errors (except 429), or non-error responses like
+    'No results found'.
+    """
+    last_exc = None
+    for attempt in range(1, _TOOL_MAX_RETRIES + 1):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_retryable_error(exc):
+                # Not a transient error — give up immediately
+                raise
+            if attempt < _TOOL_MAX_RETRIES:
+                delay = _compute_delay(attempt)
+                logger.warning(
+                    "Tool retry %d/%d for %s after %s: delaying %.1fs",
+                    attempt, _TOOL_MAX_RETRIES,
+                    fn.__name__, exc, delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "Tool %s failed after %d attempts: %s",
+                    fn.__name__, _TOOL_MAX_RETRIES, exc,
+                )
+                raise
+
 
 # ── Tool definitions (OpenAI tool-calling format) ──────────────────
 
@@ -111,30 +189,21 @@ def get_available_tools() -> List[Dict[str, Any]]:
 
 # ── Tool implementations ───────────────────────────────────────────
 
-async def wikipedia_search(query: str) -> str:
+async def _wikipedia_search_impl(query: str) -> str:
     """
     Search Wikipedia for a topic and return a summary.
 
-    Uses the Wikipedia REST API v1 which returns structured summary data.
-    Falls back to the search endpoint if direct title lookup fails.
+    Uses the MediaWiki search endpoint to find the correct page title,
+    then fetches the summary via REST API v1 using that title. Falls back
+    to action=query with prop=extracts if the REST summary endpoint returns
+    404 (happens for some newer pages that lack REST summary data).
+
+    Raises transient errors (connection, timeout, 5xx) so the retry wrapper
+    can handle them. Returns formatted strings for non-transient outcomes.
     """
     client = get_tool_client()
-    # Try direct title lookup first
-    title = query.strip()
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
-    try:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
-        return _format_wikipedia_result(data)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code != 404:
-            logger.warning("Wikipedia direct lookup failed: %s", e)
-            return f"Error searching Wikipedia for '{query}': {e.response.text}"
-    except Exception as e:
-        logger.warning("Wikipedia direct lookup error: %s", e)
 
-    # Fallback: use search endpoint to find the right page
+    # Step 1: Search to find the correct page title
     search_url = "https://en.wikipedia.org/w/api.php"
     search_params = {
         "action": "query",
@@ -142,25 +211,48 @@ async def wikipedia_search(query: str) -> str:
         "srsearch": query,
         "format": "json",
     }
-    try:
-        response = await client.get(search_url, params=search_params)
-        response.raise_for_status()
-        data = response.json()
-        results = data.get("query", {}).get("search", [])
-        if not results:
-            return f"No Wikipedia results found for '{query}'."
+    response = await client.get(search_url, params=search_params)
+    response.raise_for_status()
+    data = response.json()
+    results = data.get("query", {}).get("search", [])
+    if not results:
+        return f"No Wikipedia results found for '{query}'."
 
-        # Use the top result's pageid to get summary
-        top_result = results[0]
-        page_id = top_result["pageid"]
-        summary_url = f"https://en.wikipedia.org/api/rest_v1/page/{page_id}/summary"
-        summary_response = await client.get(summary_url)
-        summary_response.raise_for_status()
+    top_result = results[0]
+    title = top_result["title"]
+    page_id = top_result["pageid"]
+
+    # Step 2: Try REST API summary by title (most reliable for plain text)
+    wiki_title = title.replace(" ", "_")
+    summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_title}"
+    summary_response = await client.get(summary_url)
+    if summary_response.status_code == 200:
         summary_data = summary_response.json()
         return _format_wikipedia_result(summary_data)
-    except Exception as e:
-        logger.warning("Wikipedia search fallback failed: %s", e)
-        return f"Error searching Wikipedia for '{query}': {str(e)}"
+
+    # Step 3: Fallback — REST summary by pageid
+    summary_url2 = f"https://en.wikipedia.org/api/rest_v1/page/{page_id}/summary"
+    summary_response2 = await client.get(summary_url2)
+    if summary_response2.status_code == 200:
+        summary_data = summary_response2.json()
+        return _format_wikipedia_result(summary_data)
+
+    # Step 4: Final fallback — action=query with prop=extracts (returns HTML)
+    extract_url = "https://en.wikipedia.org/w/api.php"
+    extract_params = {
+        "action": "query",
+        "pageids": page_id,
+        "prop": "extracts",
+        "exlimit": 1,
+        "format": "json",
+    }
+    extract_response = await client.get(extract_url, params=extract_params)
+    extract_response.raise_for_status()
+    extract_data = extract_response.json()
+    page = list(extract_data.get("query", {}).get("pages", {}).values())[0]
+    raw_extract = page.get("extract", "")
+    clean_extract = _strip_html(raw_extract)
+    return f"Wikipedia: {title}\n\n{clean_extract}"
 
 
 def _format_wikipedia_result(data: Dict[str, Any]) -> str:
@@ -171,18 +263,31 @@ def _format_wikipedia_result(data: Dict[str, Any]) -> str:
 
     parts = [f"Wikipedia: {title}"]
     if description:
-        parts.append(f"{description}")
+        parts.append(description)
     if extract:
-        parts.append(f"{extract}")
+        parts.append(extract)
 
     return "\n".join(parts)
 
 
-async def web_search(query: str) -> str:
+def _strip_html(html: str) -> str:
+    """Strip HTML tags from a string, preserving paragraph breaks."""
+    # Replace <p> tags with newlines
+    text = re.sub(r"<p[^>]*>", "\n", html)
+    text = re.sub(r"</p>", "\n", text)
+    # Remove all other tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Clean up multiple blank lines
+    text = re.sub(r"\n\s*\n", "\n\n", text)
+    return text.strip()
+
+
+async def _web_search_impl(query: str) -> str:
     """
     Perform a web search using DuckDuckGo Instant Answer API.
 
     Returns the abstract/answer if available, or relevant results.
+    Raises transient errors so the retry wrapper can handle them.
     """
     client = get_tool_client()
     url = "https://api.duckduckgo.com/"
@@ -190,34 +295,57 @@ async def web_search(query: str) -> str:
         "q": query,
         "format": "json",
     }
+    response = await client.get(url, params=params)
+    response.raise_for_status()
+    data = response.json()
+
+    result_parts = []
+
+    # Instant answer (abstract)
+    abstract = data.get("Abstract", "")
+    abstract_url = data.get("AbstractURL", "")
+    if abstract:
+        result_parts.append(f"Answer: {abstract}")
+        if abstract_url:
+            result_parts.append(f"Source: {abstract_url}")
+
+    # Related topics
+    related_topics = data.get("RelatedTopics", [])
+    if related_topics and not abstract:
+        for topic in related_topics[:5]:
+            text = topic.get("Text", "")
+            if text:
+                result_parts.append(text)
+
+    if not result_parts:
+        return f"No results found for web search '{query}'."
+
+    return "\n\n".join(result_parts)
+
+
+# ── Public tool functions (wrapped with retry) ─────────────────────
+
+async def wikipedia_search(query: str) -> str:
+    """
+    Search Wikipedia for a topic and return a summary.
+
+    Retries on transient failures (connection errors, timeouts, 5xx).
+    """
     try:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
+        return await _with_retry(_wikipedia_search_impl, query)
+    except Exception as e:
+        logger.warning("Wikipedia search failed: %s", e)
+        return f"Error searching Wikipedia for '{query}': {str(e)}"
 
-        result_parts = []
 
-        # Instant answer (abstract)
-        abstract = data.get("Abstract", "")
-        abstract_url = data.get("AbstractURL", "")
-        if abstract:
-            result_parts.append(f"Answer: {abstract}")
-            if abstract_url:
-                result_parts.append(f"Source: {abstract_url}")
+async def web_search(query: str) -> str:
+    """
+    Perform a web search using DuckDuckGo.
 
-        # Related topics
-        related_topics = data.get("RelatedTopics", [])
-        if related_topics and not abstract:
-            for topic in related_topics[:5]:
-                text = topic.get("Text", "")
-                if text:
-                    result_parts.append(text)
-
-        if not result_parts:
-            return f"No results found for web search '{query}'."
-
-        return "\n\n".join(result_parts)
-
+    Retries on transient failures (connection errors, timeouts, 5xx).
+    """
+    try:
+        return await _with_retry(_web_search_impl, query)
     except Exception as e:
         logger.warning("Web search failed: %s", e)
         return f"Error performing web search for '{query}': {str(e)}"
