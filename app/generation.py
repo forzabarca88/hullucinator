@@ -13,42 +13,13 @@ from app.schemas import BookState
 from app.status import _transition, is_terminal_status
 from app.parsing import parse_outline
 from app.config import get_default_shared_config
+from app.web_grounding import _generate_with_optional_tools
 
 logger = logging.getLogger(__name__)
 
 # Shared config — single source of truth
 _shared_config = get_default_shared_config()
 _gen_config = _shared_config.generation
-
-def _unwrap_json_content(text: str) -> str:
-    """If text looks like JSON wrapping plain content, extract the inner text.
-    
-    Returns the original text if it's not valid JSON or doesn't contain
-    a recognizable content wrapper.
-    """
-    import json
-    # Try parsing as JSON
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return text
-
-    if isinstance(data, str):
-        return data
-    if isinstance(data, list):
-        return "\n".join(str(item) for item in data).strip()
-    if isinstance(data, dict):
-        # Check common keys for wrapped content
-        for key in ("content", "text", "body", "response", "output"):
-            if key in data:
-                return str(data[key]).strip()
-        # "chapters" key means the LLM returned JSON when asked for plain text
-        if "chapters" in data and isinstance(data["chapters"], list):
-            return "\n\n".join(str(c) for c in data["chapters"]).strip()
-        # Last resort: serialize the whole dict back
-        return json.dumps(data, indent=2)
-    return text
-
 
 # Length-to-chapter-count guidance (derived from shared config)
 LENGTH_CHAPTER_COUNT: dict[str, str] = {
@@ -123,7 +94,7 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
     _update_progress(book, "Generating summary...", percentage=10)
     save_book(book.id, book)
 
-    response = await ai_client.generate_completion(messages, temperature=_gen_config.summary_temperature)
+    response = await _generate_with_optional_tools(ai_client, messages, _gen_config.summary_temperature)
     summary = _extract_content(response)
 
     book.summary = summary
@@ -171,7 +142,7 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
     _update_progress(book, "Generating outline...", percentage=30)
     save_book(book.id, book)
 
-    response = await ai_client.generate_completion(messages, temperature=_gen_config.outline_temperature)
+    response = await _generate_with_optional_tools(ai_client, messages, _gen_config.outline_temperature)
     outline_chapters = parse_outline(response, [])
 
     # Enforce chapter count to match the length tier
@@ -251,7 +222,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
                          percentage=40 + int(i / total * 30))
         save_book(book.id, book)
 
-        response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_temperature)
+        response = await _generate_with_optional_tools(ai_client, messages, _gen_config.chapter_temperature)
         chapter_content = _extract_content(response)
         # Unwrap JSON if the LLM returned JSON despite being asked for plain text
         chapter_content = _unwrap_json_content(chapter_content)
@@ -357,7 +328,7 @@ async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
                          percentage=40 + int((already_done + i) / total * 30))
         save_book(book.id, book)
 
-        response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_temperature)
+        response = await _generate_with_optional_tools(ai_client, messages, _gen_config.chapter_temperature)
         chapter_content = _extract_content(response)
         chapter_content = _unwrap_json_content(chapter_content)
 
@@ -395,5 +366,5 @@ async def _summarize_chapter(ai_client: AIClient, chapter_content: str, chapter_
         )},
     ]
 
-    response = await ai_client.generate_completion(messages, temperature=_gen_config.chapter_summary_temperature)
+    response = await _generate_with_optional_tools(ai_client, messages, _gen_config.chapter_summary_temperature)
     return _extract_content(response)

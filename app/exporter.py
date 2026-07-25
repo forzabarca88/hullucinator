@@ -9,6 +9,7 @@ import re
 import html as html_lib
 import logging
 from pathlib import Path
+from typing import Optional
 
 from app.logging import log_error_with_trace
 
@@ -269,6 +270,7 @@ def export_to_epub(
     tags: list[str] = None,
     output_dir: str = None,
     review: dict = None,
+    cover_image: Optional[str] = None,
 ):
     """Export a book to EPUB format. Returns the absolute path to the file."""
     if output_dir is None:
@@ -293,8 +295,35 @@ def export_to_epub(
     )
     book.add_item(style)
 
-    # ── Cover page ──
-    cover_page = epub.EpubHtml(title='Cover', file_name='cover.xhtml', lang='en')
+    # ── Cover image ──
+    has_cover_image = False
+    if cover_image:
+        # Import dynamically so test fixtures that override storage paths work correctly
+        from app import storage as _storage
+        cover_path = _storage.HULLUCINATOR_DATA_DIR / cover_image
+        if cover_path.exists():
+            image_data = cover_path.read_bytes()
+            # Proper suffix-to-MIME mapping (supports png, jpg, jpeg, webp, gif)
+            _MIME_MAP = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".webp": "image/webp",
+                ".gif": "image/gif",
+            }
+            mime_type = _MIME_MAP.get(cover_path.suffix.lower(), "image/png")
+            book.set_cover(mime_type, image_data)
+            has_cover_image = True
+        else:
+            logger.warning("Cover image not found at %s, skipping", cover_path)
+
+    # ── Cover page (text fallback, always included) ──
+    # When a cover image is set, ebooklib creates its own cover.xhtml internally.
+    # Rename the text page to 'title-page' to avoid duplicate file name collision.
+    if has_cover_image:
+        cover_page = epub.EpubHtml(title='Title Page', file_name='title-page.xhtml', lang='en')
+    else:
+        cover_page = epub.EpubHtml(title='Cover', file_name='cover.xhtml', lang='en')
     cover_html = '<div class="cover-page">'
     cover_html += f'<h1>{html_lib.escape(title)}</h1>'
     if tags:
@@ -344,6 +373,7 @@ def export_to_pdf(
     tags: list[str] = None,
     output_dir: str = None,
     review: dict = None,
+    cover_image: Optional[str] = None,
 ):
     """Export a book to PDF format. Returns the absolute path to the file.
     
@@ -374,9 +404,40 @@ def export_to_pdf(
     font_family = "Playfair" if fonts_registered else "Times"
     font_mono = "PlexMono" if fonts_registered else "Courier"
 
+    # ── Cover image on title page ──
+    pdf_width = pdf.w
+    pdf_height = pdf.h
+    margin = 20  # pixels from page edges
+    max_img_width = pdf_width - 2 * margin
+    max_img_height = pdf_height - max_img_width - 60  # leave room for title + metadata below
+
+    if cover_image:
+        # Import dynamically so test fixtures that override storage paths work correctly
+        from app import storage as _storage
+        cover_path = _storage.HULLUCINATOR_DATA_DIR / cover_image
+        if cover_path.exists():
+            # Use PIL to read image dimensions for scaling
+            from PIL import Image as _PILImage
+            try:
+                with _PILImage.open(str(cover_path)) as img:
+                    img_w, img_h = img.size
+                scale = min(max_img_width / img_w, max_img_height / img_h)
+                new_w = img_w * scale
+                new_h = img_h * scale
+                x = (pdf_width - new_w) / 2
+                y = margin
+                pdf.image(str(cover_path), x=x, y=y, w=new_w, h=new_h)
+                pdf.set_y(y + new_h + 8)
+            except Exception as e:
+                log_error_with_trace(
+                    "Could not read cover image %s: %s, skipping", cover_path, e,
+                    exc=e, logger_obj=logger,
+                )
+        else:
+            logger.warning("Cover image not found at %s, skipping", cover_path)
+
     # Title page with decorative border
     pdf.set_font(font_family, "B", 20)
-    pdf.ln(30)
     pdf.cell(200, 15, text=title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
     pdf.ln(6)
     

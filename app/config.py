@@ -157,6 +157,11 @@ class UISchema(BaseModel):
     title_max_length: int = Field(default=200, description="Maximum title length")
 
 
+class ToolConfig(BaseModel):
+    """Tool calling configuration."""
+    allow_web_grounding: bool = Field(default=False, description="Enable tool calls for Wikipedia and web search during generation")
+
+
 class SharedConfig(BaseModel):
     """Complete shared configuration object."""
     lengths: List[LengthConfig]
@@ -167,6 +172,7 @@ class SharedConfig(BaseModel):
     concurrency: ConcurrencyConfig
     validation: ValidationConfig
     ui: UISchema
+    tools: ToolConfig
 
 
 def get_default_shared_config() -> SharedConfig:
@@ -231,4 +237,5 @@ DEFAULT_SHARED_CONFIG = SharedConfig(
         prompt_warn_threshold=10000,
         title_max_length=200,
     ),
+    tools=ToolConfig(),
 )

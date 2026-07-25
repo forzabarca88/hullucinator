@@ -13,12 +13,17 @@ import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, File, UploadFile
 from fastapi.responses import HTMLResponse, FileResponse
 
 from app.ai_client import AIClient, ReviewerClient, _parse_models_response, _build_api_url
 from app.orchestrator import Orchestrator
-from app.storage import save_book, load_book, list_books, delete_book, save_config, load_config
+from app.storage import (
+    save_book, load_book, list_books, delete_book,
+    save_config, load_config,
+    save_cover_image, load_cover_image, delete_cover_image,
+    COVERS_DIR, ensure_covers_dir,
+)
 from app.status import RESUMABLE_STATUSES
 from app.exporter import export_to_epub, export_to_pdf
 from app.config import get_default_shared_config
@@ -156,6 +161,7 @@ def create_router(
         default_turns = persisted.review_max_turns if persisted else _default_config.review.max_turns_default
         default_word_threshold = persisted.review_word_threshold if persisted else _default_config.review.word_threshold_default
         default_chunk_size = persisted.review_chunk_size if persisted else _default_config.review.chunk_size_default
+        default_web_grounding = persisted.allow_web_grounding if persisted else _default_config.tools.allow_web_grounding
 
         # Re-evaluate configured status from live client state
         server_config.configured = bool(ai_client.endpoint_url and ai_client.model_name)
@@ -171,6 +177,7 @@ def create_router(
             review_max_turns=default_turns,
             review_word_threshold=default_word_threshold,
             review_chunk_size=default_chunk_size,
+            allow_web_grounding=default_web_grounding,
         )
 
     @router.post("/api/config")
@@ -223,6 +230,7 @@ def create_router(
             review_max_turns=config.review_max_turns if config.review_max_turns is not None else (server_config.persisted.review_max_turns if server_config.persisted else _default_config.review.max_turns_default),
             review_word_threshold=config.review_word_threshold if config.review_word_threshold is not None else (server_config.persisted.review_word_threshold if server_config.persisted else _default_config.review.word_threshold_default),
             review_chunk_size=config.review_chunk_size if config.review_chunk_size is not None else (server_config.persisted.review_chunk_size if server_config.persisted else _default_config.review.chunk_size_default),
+            allow_web_grounding=config.allow_web_grounding if config.allow_web_grounding is not None else (server_config.persisted.allow_web_grounding if server_config.persisted else _default_config.tools.allow_web_grounding),
         )
         save_config(persisted)
         logger.info("Config saved to disk: endpoint=%s, model=%s",
@@ -470,6 +478,7 @@ def create_router(
                 "skip_review": b.skip_review,
                 "review": b.review,
                 "review_history": b.review_history,
+                "cover_image": b.cover_image,
             }
             for b in books
         ]
@@ -560,14 +569,14 @@ def create_router(
             review_data = book_state.review if book_state.review else None
             download_name = _safe_download_name(book_state.title)
             if fmt == "epub":
-                path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
+                path = export_to_epub(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data, cover_image=book_state.cover_image)
                 return FileResponse(
                     path,
                     media_type="application/epub+zip",
                     filename=f"{download_name}.epub",
                 )
             elif fmt == "pdf":
-                path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data)
+                path = export_to_pdf(book_id, book_state.title, book_state.chapters, book_state.tags, review=review_data, cover_image=book_state.cover_image)
                 return FileResponse(
                     path,
                     media_type="application/pdf",
@@ -630,6 +639,17 @@ def create_router(
             skip_review=request.skip_review,
             progress={"current_step": "pending", "total_chapters": 0, "chapters_completed": 0, "percentage": 0},
         )
+
+        # Preserve cover image on retry — copy old cover to new book's path
+        if book_state.cover_image:
+            cover_format = Path(book_state.cover_image).suffix.lstrip('.')
+            old_cover_data = load_cover_image(book_id, cover_format)
+            if old_cover_data is not None:
+                new_cover_path = save_cover_image(new_book_id, old_cover_data, cover_format)
+                new_book_state.cover_image = new_cover_path
+                logger.info("Retry: copied cover image (%s) from '%s' to '%s'",
+                           cover_format, book_id, new_book_id)
+
         save_book(new_book_id, new_book_state)
 
         # Start generation as background task
@@ -640,8 +660,13 @@ def create_router(
         task = asyncio.create_task(_semaphore_task())
         active_tasks[new_book_id] = task
 
-        # Delete the old book
+        # Delete the old book and its cover image
         delete_book(book_id)
+        if book_state.cover_image:
+            cover_format = Path(book_state.cover_image).suffix.lstrip('.')
+            deleted = delete_cover_image(book_id, cover_format)
+            if deleted:
+                logger.info("Retry: deleted old cover image for book '%s'", book_id)
 
         logger.info("Retry: created new book '%s' (%s) from failed book '%s' (%s)",
                     new_book_state.title, new_book_id, book_state.title, book_id)
@@ -744,5 +769,107 @@ def create_router(
 
         logger.info("Deleted book '%s' (%s)", book_state.title, book_id)
         return {"status": "deleted", "book_id": book_id}
+
+    # ── Cover Image Endpoints ────────────────────────────────────────────
+
+    @router.post("/api/books/{book_id}/cover")
+    async def upload_cover(book_id: str, file: UploadFile = File(...)):
+        """Upload a cover image for a book via multipart form-data.
+
+        Validates image format (png, jpg, jpeg, webp) and size (max 5MB).
+        Saves the image and updates the book's cover_image field.
+        """
+        book_state = load_book(book_id)
+        if not book_state:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        # Validate format
+        allowed_extensions = {".png", ".jpg", ".jpeg", ".webp"}
+        ext = Path(file.filename).suffix.lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid image format '{ext}'. Allowed: {', '.join(sorted(allowed_extensions))}",
+            )
+
+        # Read and validate size
+        content = await file.read()
+        max_size = 5 * 1024 * 1024  # 5MB
+        if len(content) > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image too large ({len(content)} bytes). Maximum size is {max_size} bytes (5MB).",
+            )
+
+        # Save cover image, preserving original file extension
+        cover_path = save_cover_image(book_id, content, ext.lstrip('.'))
+
+        # Update book state
+        book_state.cover_image = cover_path
+        save_book(book_id, book_state)
+
+        logger.info("Cover image uploaded for book '%s' (%s)", book_state.title, book_id)
+        return {"cover_image": cover_path}
+
+    @router.get("/api/books/{book_id}/cover")
+    async def get_cover(book_id: str):
+        """Serve the cover image file for a book.
+
+        Returns a 404 if the book has no cover image set.
+        """
+        book_state = load_book(book_id)
+        if not book_state:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        if not book_state.cover_image:
+            raise HTTPException(status_code=404, detail="No cover image set for this book")
+
+        # Resolve full path from the stored relative path (e.g., covers/{book_id}.png)
+        from app import storage as _storage
+        cover_path = _storage.HULLUCINATOR_DATA_DIR / book_state.cover_image
+        if not cover_path.exists():
+            raise HTTPException(status_code=404, detail="Cover image file not found")
+
+        # Determine content type from file extension
+        ext = cover_path.suffix.lower()
+        content_type_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+        media_type = content_type_map.get(ext, "image/png")
+
+        return FileResponse(
+            cover_path,
+            media_type=media_type,
+            filename=f"cover-{book_id}{ext}",
+        )
+
+    @router.delete("/api/books/{book_id}/cover")
+    async def delete_cover(book_id: str):
+        """Delete the cover image for a book.
+
+        Removes the image file and clears the book's cover_image field.
+        """
+        book_state = load_book(book_id)
+        if not book_state:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        if not book_state.cover_image:
+            raise HTTPException(status_code=404, detail="No cover image set for this book")
+
+        # Extract format from stored cover_image path and delete
+        cover_format = Path(book_state.cover_image).suffix.lstrip('.')
+        deleted = delete_cover_image(book_id, cover_format)
+        if not deleted:
+            logger.warning("Cover image file not found for book %s", book_id)
+
+        # Clear cover_image from book state
+        book_state.cover_image = None
+        save_book(book_id, book_state)
+
+        logger.info("Cover image deleted for book '%s' (%s)", book_state.title, book_id)
+        return {"status": "cover_deleted", "book_id": book_id}
 
     return router

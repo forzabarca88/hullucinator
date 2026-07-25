@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.config import SharedConfig, LengthConfig, StatusConfig, ReviewConfig, GenerationConfig, ClientConfig, ConcurrencyConfig, ValidationConfig, UISchema, get_default_shared_config
+from app.config import SharedConfig, LengthConfig, StatusConfig, ReviewConfig, GenerationConfig, ClientConfig, ConcurrencyConfig, ValidationConfig, UISchema, ToolConfig, get_default_shared_config
 
 
 class TestSharedConfig:
@@ -72,6 +72,11 @@ class TestSharedConfig:
         assert config.ui.prompt_warn_threshold == 10000
         assert config.ui.title_max_length == 200
 
+    def test_tools_config(self):
+        """ToolConfig has correct defaults."""
+        config = get_default_shared_config()
+        assert config.tools.allow_web_grounding is False
+
     def test_client_config(self):
         """ClientConfig has correct defaults."""
         config = get_default_shared_config()
@@ -97,6 +102,7 @@ class TestSharedConfig:
             validation=ValidationConfig(),
             client=ClientConfig(),
             ui=UISchema(),
+            tools=ToolConfig(),
         )
         assert config.review.max_turns_default == 3
         assert config.review.pass_score == 8
@@ -114,6 +120,7 @@ class TestSharedConfig:
                 validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
+                tools=ToolConfig(),
             )
         with pytest.raises(ValidationError, match="max_turns_default"):
             SharedConfig(
@@ -125,6 +132,7 @@ class TestSharedConfig:
                 validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
+                tools=ToolConfig(),
             )
 
     def test_word_threshold_constraints(self):
@@ -139,6 +147,7 @@ class TestSharedConfig:
                 validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
+                tools=ToolConfig(),
             )
 
     def test_chunk_size_constraints(self):
@@ -153,6 +162,7 @@ class TestSharedConfig:
                 validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
+                tools=ToolConfig(),
             )
         with pytest.raises(ValidationError, match="chunk_size"):
             SharedConfig(
@@ -164,6 +174,7 @@ class TestSharedConfig:
                 validation=ValidationConfig(),
                 client=ClientConfig(),
                 ui=UISchema(),
+                tools=ToolConfig(),
             )
 
 

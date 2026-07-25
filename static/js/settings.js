@@ -63,6 +63,7 @@ async function checkConfig() {
       $('cfgMaxTurns').value = cfg.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
       $('cfgWordThreshold').value = cfg.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
       $('cfgChunkSize').value = cfg.review_chunk_size || 5;
+      $('cfgWebGrounding').checked = cfg.allow_web_grounding ?? false;
       // Load the library of existing books
       loadBooks();
     }
@@ -94,6 +95,7 @@ async function loadConfig() {
     $('cfgMaxTurns').value = cfg.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
     $('cfgWordThreshold').value = cfg.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
     $('cfgChunkSize').value = cfg.review_chunk_size || 5;
+    $('cfgWebGrounding').checked = cfg.allow_web_grounding ?? false;
   } catch (err) {
     console.error('loadConfig error:', err);
   }
@@ -113,6 +115,7 @@ async function saveConfig() {
       review_max_turns: parseInt($('cfgMaxTurns')?.value) ?? SHARED_CONFIG?.review?.max_turns_default ?? 2,
       review_word_threshold: parseInt($('cfgWordThreshold')?.value) ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000,
       review_chunk_size: parseInt($('cfgChunkSize')?.value) || 5,
+      allow_web_grounding: $('cfgWebGrounding')?.checked ?? false,
     };
 
     // Validate credentials before saving
@@ -134,6 +137,7 @@ async function saveConfig() {
     appConfigured = res.config.configured;
     // Sync create form's Max Review Turns with saved config
     if ($('maxTurns')) $('maxTurns').value = res.config.review_max_turns || 2;
+    if ($('cfgWebGrounding')) $('cfgWebGrounding').checked = res.config.allow_web_grounding ?? false;
     saveBtn.disabled = false;
   } catch (err) {
     toast('Save error: ' + err.message, 'error');
@@ -181,6 +185,7 @@ async function saveSetupConfig() {
     review_max_turns: parseInt($('setupMaxTurns')?.value) ?? SHARED_CONFIG?.review?.max_turns_default ?? 2,
     review_word_threshold: parseInt($('setupWordThreshold')?.value) ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000,
     review_chunk_size: parseInt($('setupChunkSize')?.value) || 5,
+    allow_web_grounding: $('setupWebGrounding')?.checked ?? false,
   };
 
   // Validate credentials before saving
@@ -213,6 +218,7 @@ async function saveSetupConfig() {
     $('cfgMaxTurns').value = res.config.review_max_turns ?? SHARED_CONFIG?.review?.max_turns_default ?? 2;
     $('cfgWordThreshold').value = res.config.review_word_threshold ?? SHARED_CONFIG?.review?.word_threshold_default ?? 30000;
     $('cfgChunkSize').value = res.config.review_chunk_size || 5;
+    $('cfgWebGrounding').checked = res.config.allow_web_grounding ?? false;
     if ($('maxTurns')) $('maxTurns').value = res.config.review_max_turns || 2;
 
     // Load existing books

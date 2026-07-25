@@ -17,9 +17,11 @@ function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
   let tagsHtml = (b.tags || []).map(t => `<span class="tag-badge">${esc(t)}</span>`).join('');
   let lengthLabel = b.length ? getStatusLabel(b.length) : '';
   let lengthBadge = lengthLabel ? `<span class="status-label" style="color:var(--status-pending);background:rgba(91,123,138,0.08)">${esc(lengthLabel)}</span>` : '';
+  let coverHtml = b.cover_image ? `<img class="book-cover" src="${API}/books/${b.id}/cover" alt="Cover for ${esc(b.title)}">` : '';
 
   return `<div class="book-card" data-id="${b.id}">
     <button class="book-delete-btn" data-delete-id="${b.id}" title="Delete book">Delete</button>
+    ${coverHtml}
     <div class="book-title">${esc(b.title)}</div>
     <div class="book-meta">
       ${statusBadge(b.status)}
@@ -36,6 +38,13 @@ function buildBookCardHtml(b, p, pct, isDone, isFail, pClass) {
 function renderDetail(book) {
   let html = '';
 
+  // Cover preview
+  if (book.cover_image) {
+    html += `<div class="modal-section">
+      <img class="detail-cover" src="${API}/books/${book.id}/cover" alt="Cover for ${esc(book.title)}">
+    </div>`;
+  }
+
   // Settings used when creating this book
   html += `<div class="modal-section">
     <h3>Settings</h3>
@@ -44,6 +53,7 @@ function renderDetail(book) {
       <div class="detail-setting"><span class="detail-label">Length</span><div class="detail-value">${esc(getStatusLabel(book.length || 'novel'))}</div></div>
       ${book.tags && book.tags.length ? `<div class="detail-setting"><span class="detail-label">Tags</span><div class="detail-value">${book.tags.map(t => `<span class="tag-badge">${esc(t)}</span>`).join(' ')}</div></div>` : ''}
       ${book.review_max_turns ? `<div class="detail-setting"><span class="detail-label">Max Review Turns</span><div class="detail-value">${book.review_max_turns}</div></div>` : ''}
+      ${book.skip_review !== undefined ? `<div class="detail-setting"><span class="detail-label">Skip Review</span><div class="detail-value">${book.skip_review ? 'Yes' : 'No'}</div></div>` : ''}
     </div>
   </div>`;
 
@@ -97,6 +107,9 @@ function renderDetail(book) {
 
   // Actions
   html += `<div class="modal-section" style="display:flex;gap:0.5rem;flex-wrap:wrap">`;
+  if (book.status !== 'failed') {
+    html += `<button class="btn btn-secondary btn-sm" data-action="cover">Assign Book Cover</button>`;
+  }
   if (book.status === 'completed' || book.status === 'reviewed') {
     html += `<a class="btn btn-primary btn-sm" href="${API}/books/${book.id}/export/epub">Download EPUB</a>`;
     html += `<a class="btn btn-secondary btn-sm" href="${API}/books/${book.id}/export/pdf">Download PDF</a>`;

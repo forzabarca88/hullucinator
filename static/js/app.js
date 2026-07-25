@@ -91,7 +91,7 @@ function initCreateForm() {
           tags: tags,
           length: $('bookLength')?.value || 'novel',
           review_max_turns: isNaN(turns) ? 2 : turns,
-          skip_review: false,
+          skip_review: $('skipReview').checked,
         }),
       });
       toast('Book "' + data.book_id.slice(0, 8) + '…" queued!', 'success');
@@ -201,7 +201,8 @@ function attachModalActionListeners(bookId) {
   detailContent.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.action;
-      if (action === 'review') triggerReview(bookId);
+      if (action === 'cover') uploadCover(bookId);
+      else if (action === 'review') triggerReview(bookId);
       else if (action === 'retry') retryBook(bookId);
       else if (action === 'delete') deleteBook(bookId, $('detailTitle').textContent);
     });
@@ -288,11 +289,61 @@ async function deleteBook(bookId, title) {
   }
 }
 
+/* ── Upload Cover ──────────────────────────────────────────────── */
+async function uploadCover(bookId) {
+  const input = $('coverFileInput');
+  if (!input) return;
+  input.value = '';
+  input.click();
+
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+
+    // Validate type
+    if (!file.type.startsWith('image/')) {
+      toast('Please select an image file.', 'error');
+      input.value = '';
+      return;
+    }
+
+    // Validate size (5 MB max — matches backend limit)
+    if (file.size > 5 * 1024 * 1024) {
+      toast('Image must be under 5 MB.', 'error');
+      input.value = '';
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      await fetch(`${API}/books/${bookId}/cover`, {
+        method: 'POST',
+        body: formData,
+      }).then(r => {
+        if (!r.ok) {
+          return r.json().then(j => { throw new Error(j.detail || r.statusText); });
+        }
+        return r.json();
+      });
+      toast('Cover image uploaded.', 'success');
+      closeModal();
+      loadBooks();
+      openDetail(bookId);
+    } catch (err) {
+      toast('Error: ' + err.message, 'error');
+    }
+    input.value = '';
+  };
+}
+
 /* ── Init ──────────────────────────────────────────────────────── */
 function initApp() {
   initTags();
   renderLengthSelect($('bookLength'));
   renderMaxTurnsSelect($('maxTurns'));
+  if ($('skipReview')) $('skipReview').checked = false;
   initCreateForm();
   initModal();
   // loadBooks runs after config check in initSettings → checkConfig

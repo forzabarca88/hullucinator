@@ -21,8 +21,115 @@ import httpx
 from app.logging import log_error_with_trace
 
 from app.config import get_default_shared_config
+from app.tools import execute_tool_call, parse_tool_calls, has_tool_calls
 
 logger = logging.getLogger(__name__)
+
+# ── Shared tool-calling helpers ───────────────────────────────────────────
+# Extracted from AIClient/ReviewerClient to eliminate ~60 lines of duplication.
+
+
+async def _execute_tool_calls_helper(
+    tool_calls: List[Dict[str, Any]],
+    log_prefix: str,
+) -> List[Dict[str, Any]]:
+    """
+    Process each tool call and return results.
+
+    Args:
+        tool_calls: List of tool_call dicts from LLM response.
+        log_prefix: Prefix for log messages (e.g. 'AIClient', 'ReviewerClient').
+
+    Returns:
+        List of result dicts with 'tool_call_id' and 'result' keys.
+    """
+    results = []
+    for tc in tool_calls:
+        result = await execute_tool_call(tc)
+        results.append({
+            "tool_call_id": tc.get("id"),
+            "result": result,
+        })
+        logger.info(
+            "%s tool '%s' executed (id=%s)",
+            log_prefix,
+            tc.get("function", {}).get("name", "unknown"),
+            tc.get("id"),
+        )
+    return results
+
+
+async def _generate_completion_with_tools_helper(
+    generate_completion_fn,
+    execute_tool_calls_fn,
+    messages: List[Dict[str, str]],
+    temperature: float,
+    tools: List[Dict[str, Any]],
+    max_retries: int,
+    max_turns: int,
+    model_override: Optional[str],
+    log_prefix: str,
+) -> Dict[str, Any]:
+    """
+    Send a completion request with tools and handle the full
+    tool-calling loop: send → detect tool calls → execute → re-send.
+
+    Args:
+        generate_completion_fn: The client's generate_completion method.
+        execute_tool_calls_fn: The client's execute_tool_calls method.
+        messages: Initial chat messages
+        temperature: Sampling temperature
+        tools: List of tool definitions (OpenAI format)
+        max_retries: Number of retry attempts per request
+        max_turns: Maximum tool-call turns before forcing completion
+        model_override: Optional model name to use instead of default
+        log_prefix: Prefix for log messages
+
+    Returns:
+        Final response dict with text content (after all tool calls resolved).
+
+    Raises:
+        RuntimeError: If endpoint doesn't support tool calling or max turns exceeded.
+    """
+    working_messages = list(messages)
+
+    for turn in range(max_turns):
+        response = await generate_completion_fn(
+            messages=working_messages,
+            temperature=temperature,
+            max_retries=max_retries,
+            model_override=model_override,
+            tools=tools,
+        )
+
+        tool_calls = parse_tool_calls(response)
+        if not tool_calls:
+            # No tool calls — we have the final response
+            return response
+
+        # Execute all tool calls and append results
+        results = await execute_tool_calls_fn(tool_calls)
+
+        # Append assistant message with tool calls to conversation
+        assistant_msg = response.get("choices", [{}])[0].get("message", {})
+        working_messages.append({
+            "role": "assistant",
+            "content": assistant_msg.get("content"),
+            "tool_calls": tool_calls,
+        })
+
+        # Append tool results
+        for result in results:
+            working_messages.append({
+                "role": "tool",
+                "tool_call_id": result["tool_call_id"],
+                "content": result["result"],
+            })
+
+        logger.info("%s tool call turn %d/%d completed", log_prefix, turn + 1, max_turns)
+
+    logger.error("%s tool calling exceeded max turns (%d)", log_prefix, max_turns)
+    raise RuntimeError(f"Tool calling exceeded maximum turns ({max_turns})")
 
 # Shared config for retry/timeout defaults
 _client_config = get_default_shared_config().client
@@ -117,12 +224,17 @@ async def _retry_request(
     max_retries: int,
     log_prefix: str,
     error_prefix: str,
+    is_tool_call_request: bool = False,
 ) -> Dict[str, Any]:
     """
     Send a POST request with retry logic and jittered backoff.
 
     Retries on 429/500/503 status codes or empty responses.
     Uses async sleep to avoid blocking the event loop.
+
+    When is_tool_call_request is True, empty content is not treated as
+    a retry condition — tool-call responses legitimately have null content
+    with tool_calls instead.
     """
     last_error = None
     for attempt in range(max_retries + 1):
@@ -132,13 +244,15 @@ async def _retry_request(
             result = response.json()
 
             # Check if content is empty and retry
-            content = _extract_content(result)
-            if not content and attempt < max_retries:
-                base_wait = _client_config.empty_response_wait * (attempt + 1)
-                wait = base_wait * (_client_config.jitter_factor + random.random())
-                logger.warning("[%s] Empty response, retrying in %.1fs...", log_prefix, wait)
-                await asyncio.sleep(wait)
-                continue
+            # Skip this check for tool-call requests (tool responses have no content)
+            if not is_tool_call_request:
+                content = _extract_content(result)
+                if not content and attempt < max_retries:
+                    base_wait = _client_config.empty_response_wait * (attempt + 1)
+                    wait = base_wait * (_client_config.jitter_factor + random.random())
+                    logger.warning("[%s] Empty response, retrying in %.1fs...", log_prefix, wait)
+                    await asyncio.sleep(wait)
+                    continue
 
             return result
 
@@ -264,6 +378,7 @@ class AIClient:
         temperature: float = _gen_config.summary_temperature,
         max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Send a completion request to the LLM API with retry logic.
@@ -271,23 +386,79 @@ class AIClient:
         Retries on 429/500/503 status codes or empty responses.
         Uses async sleep to avoid blocking the event loop.
 
+        When tools are provided, the response may contain tool_calls
+        instead of text content. Returns the raw response in that case.
+
         Args:
             messages: Chat messages
             temperature: Sampling temperature
             max_retries: Number of retry attempts
             model_override: Optional model name to use instead of self._model_name
+            tools: Optional list of tool definitions (OpenAI format)
         """
         # Handle /v1 suffix
         url = _build_api_url(self._endpoint_url, "chat/completions")
-        payload = {
+        payload: Dict[str, Any] = {
             "model": model_override or self._model_name,
             "messages": messages,
             "temperature": temperature,
         }
 
+        if tools:
+            payload["tools"] = tools
+
+        is_tool_call_request = tools is not None
+
         return await _retry_request(
             self._client, url, payload, self._headers, max_retries,
             "AIClient", "API",
+            is_tool_call_request=is_tool_call_request,
+        )
+
+    async def execute_tool_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Process each tool call and return results."""
+        return await _execute_tool_calls_helper(tool_calls, "AIClient")
+
+    async def generate_completion_with_tools(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        tools: List[Dict[str, Any]],
+        max_retries: int = _client_config.max_retries,
+        max_turns: int = 5,
+        model_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send a completion request with tools and handle the full
+        tool-calling loop: send → detect tool calls → execute → re-send.
+
+        Args:
+            messages: Initial chat messages
+            temperature: Sampling temperature
+            tools: List of tool definitions (OpenAI format)
+            max_retries: Number of retry attempts per request
+            max_turns: Maximum tool-call turns before forcing completion
+            model_override: Optional model name to use instead of self._model_name
+
+        Returns:
+            Final response dict with text content (after all tool calls resolved).
+
+        Raises:
+            RuntimeError: If endpoint doesn't support tool calling or max turns exceeded.
+        """
+        return await _generate_completion_with_tools_helper(
+            self.generate_completion,
+            self.execute_tool_calls,
+            messages,
+            temperature,
+            tools,
+            max_retries,
+            max_turns,
+            model_override,
+            "AIClient",
         )
 
     async def close(self):
@@ -418,23 +589,87 @@ class ReviewerClient:
         temperature: float = _gen_config.summary_temperature,
         max_retries: int = _client_config.max_retries,
         model_override: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Send a completion request using the reviewer's endpoint/model
         but sharing the main client's HTTP connection and auth headers.
 
+        When tools are provided, the response may contain tool_calls
+        instead of text content. Returns the raw response in that case.
+
         (M3 fix: added model_override parameter for consistency with AIClient)
         (F2 fix: use effective endpoint/model via property getters for fallback)
+        (T7: added tools parameter for tool calling support)
+
+        Args:
+            messages: Chat messages
+            temperature: Sampling temperature
+            max_retries: Number of retry attempts
+            model_override: Optional model name to use instead of effective model
+            tools: Optional list of tool definitions (OpenAI format)
         """
         # Handle /v1 suffix (use effective endpoint via property)
         url = _build_api_url(self.endpoint_url, "chat/completions")
-        payload = {
+        payload: Dict[str, Any] = {
             "model": model_override or self.model_name,
             "messages": messages,
             "temperature": temperature,
         }
 
+        if tools:
+            payload["tools"] = tools
+
+        is_tool_call_request = tools is not None
+
         return await _retry_request(
             self._main._client, url, payload, self._headers, max_retries,
             "ReviewerClient", "Reviewer API",
+            is_tool_call_request=is_tool_call_request,
+        )
+
+    async def execute_tool_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Process each tool call and return results."""
+        return await _execute_tool_calls_helper(tool_calls, "ReviewerClient")
+
+    async def generate_completion_with_tools(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        tools: List[Dict[str, Any]],
+        max_retries: int = _client_config.max_retries,
+        max_turns: int = 5,
+        model_override: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Send a completion request with tools and handle the full
+        tool-calling loop: send → detect tool calls → execute → re-send.
+
+        Args:
+            messages: Initial chat messages
+            temperature: Sampling temperature
+            tools: List of tool definitions (OpenAI format)
+            max_retries: Number of retry attempts per request
+            max_turns: Maximum tool-call turns before forcing completion
+            model_override: Optional model name to use instead of effective model
+
+        Returns:
+            Final response dict with text content (after all tool calls resolved).
+
+        Raises:
+            RuntimeError: If endpoint doesn't support tool calling or max turns exceeded.
+        """
+        return await _generate_completion_with_tools_helper(
+            self.generate_completion,
+            self.execute_tool_calls,
+            messages,
+            temperature,
+            tools,
+            max_retries,
+            max_turns,
+            model_override,
+            "ReviewerClient",
         )

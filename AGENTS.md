@@ -39,6 +39,7 @@ Config sub-models:
 - `ConcurrencyConfig` — max simultaneous generations
 - `ValidationConfig` — validation thresholds
 - `UISchema` — polling intervals, input limits
+- `ToolConfig` — web grounding toggle (Wikipedia + web search during generation)
 
 ## Extending the System
 
@@ -51,3 +52,23 @@ Config sub-models:
 ## Book Resumption
 
 **Books interrupted by server shutdown automatically resume on restart.** The `lifespan` startup hook scans all stored books for non-terminal statuses (`pending`, `summary_generated`, `outline_generated`, `in_progress`, `reviewing`) and queues them for resume. Manual resume is available via `POST /api/books/{book_id}/resume`. Resume preserves all already-generated content (chapters, summaries, outline) and continues only from the point of interruption.
+
+## Cover Image Architecture
+
+**Cover images are stored in `~/.hullucinator_data/covers/` with format-preserving extensions.** The `cover_image` field on `BookState` stores a relative path (e.g., `covers/{book_id}.png`). Supported formats: PNG, JPEG, WebP. The `save_cover_image()` function preserves the original file extension so MIME type detection works correctly in EPUB export and cover serving.
+
+**Retry preserves cover images.** When retrying a book via `POST /api/books/{book_id}/retry`, the cover image file is copied to the new book's cover path (renamed with the new book ID) and the old cover file is deleted. The new book's `cover_image` field is updated to reference the copied file.
+
+**EPUB export uses proper MIME type mapping.** The suffix-to-MIME mapping supports `.png` → `image/png`, `.jpg/.jpeg` → `image/jpeg`, `.webp` → `image/webp`, `.gif` → `image/gif`.
+
+## Web Grounding
+
+**Web grounding enables factual research during generation and review.** When `allow_web_grounding` is enabled in config, the generation and review pipelines use tool calling to query Wikipedia and DuckDuckGo for factual information. Tool calling falls back gracefully to regular completion when the endpoint doesn't support it.
+
+**Shared module architecture.** `_is_web_grounding_enabled()` and `_generate_with_optional_tools()` live in `app/web_grounding.py` and are imported by both `generation.py` and `review.py`. The `WebGroundingClient` protocol type (in `web_grounding.py`) provides consistent typing for clients that support tool calling.
+
+**Persistent HTTP client.** Tool calls (Wikipedia, web search) use a module-level persistent `httpx.AsyncClient` in `app/tools.py` to avoid connection overhead per call. The client is closed during application shutdown via `close_tool_client()`.
+
+## Tool Calling
+
+**Shared helpers eliminate duplication.** `execute_tool_calls` and `generate_completion_with_tools` logic is extracted to module-level helpers (`_execute_tool_calls_helper`, `_generate_completion_with_tools_helper`) in `app/ai_client.py`. Both `AIClient` and `ReviewerClient` delegate to these shared helpers, differing only in log prefixes.
