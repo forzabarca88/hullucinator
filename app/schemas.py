@@ -44,6 +44,9 @@ class BookState(BaseModel):
     # Skip the review step entirely (H3: allows quick drafts without review)
     skip_review: bool = False
 
+    # Book cover (relative path within the book's data directory, e.g., covers/{book_id}.png)
+    cover_image: Optional[str] = None
+
     # Progress tracking for the web interface
     progress: Dict[str, Any] = Field(default_factory=lambda: {
         "current_step": "pending",
@@ -62,6 +65,8 @@ class BookCreateRequest(BaseModel):
     review_max_turns: int = Field(default=SCHEMA_DEFAULT_MAX_TURNS, ge=SCHEMA_MAX_TURNS_MIN, le=SCHEMA_MAX_TURNS_MAX)
     # Skip the review step entirely (H3: allows quick drafts without review)
     skip_review: bool = False
+    # Book cover image data (base64-encoded, for future-proofing)
+    cover_image: Optional[str] = None
 
 
 class AIConfig(BaseModel):
@@ -74,6 +79,8 @@ class AIConfig(BaseModel):
     # Review thresholds for chunked review of long books
     review_word_threshold: int = Field(default=SCHEMA_DEFAULT_WORD_THRESHOLD, ge=SCHEMA_WORD_THRESHOLD_MIN, description="Words before chunked review is used")
     review_chunk_size: int = Field(default=SCHEMA_DEFAULT_CHUNK_SIZE, ge=1, le=20, description="Chapters per review chunk")
+    # Tool calling — enable Wikipedia and web search during generation
+    allow_web_grounding: bool = False
 
 
 class AIConfigUpdate(BaseModel):
@@ -88,6 +95,7 @@ class AIConfigUpdate(BaseModel):
     review_max_turns: int | None = None
     review_word_threshold: int | None = None
     review_chunk_size: int | None = None
+    allow_web_grounding: bool | None = None
 
 
 class ModelInfo(BaseModel):
@@ -107,6 +115,7 @@ class AIConfigResponse(BaseModel):
     review_max_turns: int
     review_word_threshold: int
     review_chunk_size: int
+    allow_web_grounding: bool
 
 
 class ConfigValidationResult(BaseModel):

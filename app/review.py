@@ -15,6 +15,7 @@ from app.status import _transition
 from app.parsing import parse_critique, match_chapter_title
 from app.generation import _update_progress, _summarize_chapter
 from app.config import get_default_shared_config
+from app.web_grounding import _generate_with_optional_tools, WebGroundingClient
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def _record_review_turn(book: BookState, turn_record: dict) -> None:
 
 
 async def review_book(ai_client: AIClient, book: BookState,
-                       reviewer_client: Optional[ReviewerClient] = None) -> None:
+                       reviewer_client: Optional[WebGroundingClient] = None) -> None:
     """
     Run the review pipeline on a completed book.
 
@@ -167,7 +168,7 @@ async def review_book(ai_client: AIClient, book: BookState,
     await _full_review(reviewer, ai_client, book, turns_limit)
 
 
-async def _full_review(reviewer: AIClient, ai_client: AIClient,
+async def _full_review(reviewer: WebGroundingClient, ai_client: AIClient,
                         book: BookState, turns_limit: int) -> None:
     """Run full-book review: critique entire book → correct → re-review."""
     chapters = list(book.chapters.items())
@@ -192,7 +193,7 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
             {"role": "user", "content": review_text},
         ]
 
-        critique_response = await reviewer.generate_completion(critique_messages, temperature=_gen_config.critique_temperature)
+        critique_response = await _generate_with_optional_tools(reviewer, critique_messages, _gen_config.critique_temperature)
         critique_raw = _extract_content(critique_response)
 
         # Parse critique response
@@ -254,7 +255,7 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
                 original_content = book.chapters[chapter_title]
                 original_words = len(original_content.split())
 
-                revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
+                revision_response = await _generate_with_optional_tools(ai_client, revision_messages, _gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
                 revised_words = len(revised_content.split())
                 delta = revised_words - original_words
@@ -329,7 +330,7 @@ async def _full_review(reviewer: AIClient, ai_client: AIClient,
     save_book(book.id, book)
 
 
-async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
+async def _chunked_review(reviewer: WebGroundingClient, ai_client: AIClient,
                            book: BookState, turns_limit: int) -> None:
     """Review a long book in chunks to avoid context window overflow.
 
@@ -377,7 +378,7 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                 {"role": "user", "content": review_text},
             ]
 
-            critique_response = await reviewer.generate_completion(critique_messages, temperature=_gen_config.critique_temperature)
+            critique_response = await _generate_with_optional_tools(reviewer, critique_messages, _gen_config.critique_temperature)
             critique_raw = _extract_content(critique_response)
 
             critique_data = parse_critique(critique_raw)
@@ -449,7 +450,7 @@ async def _chunked_review(reviewer: AIClient, ai_client: AIClient,
                 original_content = book.chapters[chapter_title]
                 original_words = len(original_content.split())
 
-                revision_response = await ai_client.generate_completion(revision_messages, temperature=_gen_config.revision_temperature)
+                revision_response = await _generate_with_optional_tools(ai_client, revision_messages, _gen_config.revision_temperature)
                 revised_content = _extract_content(revision_response)
                 revised_words = len(revised_content.split())
                 delta = revised_words - original_words

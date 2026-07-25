@@ -141,6 +141,7 @@ class TestAIConfig:
         assert config.review_max_turns == 2
         assert config.review_word_threshold == 30000
         assert config.review_chunk_size == 5
+        assert config.allow_web_grounding is False
 
     def test_custom_values(self):
         """AIConfig with custom values."""
@@ -179,6 +180,13 @@ class TestAIConfig:
             AIConfig(review_chunk_size=0)
         with pytest.raises(ValidationError, match="review_chunk_size"):
             AIConfig(review_chunk_size=21)
+
+    def test_allow_web_grounding(self):
+        """allow_web_grounding can be toggled."""
+        config = AIConfig(allow_web_grounding=True)
+        assert config.allow_web_grounding is True
+        config = AIConfig(allow_web_grounding=False)
+        assert config.allow_web_grounding is False
 
     def test_no_api_keys(self):
         """AIConfig has no api_key field (security)."""

@@ -29,6 +29,7 @@ from app.ai_client import AIClient, ReviewerClient
 from app.orchestrator import Orchestrator
 from app.storage import load_config
 from app.config import get_default_shared_config
+from app.tools import close_tool_client
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -222,8 +223,9 @@ async def lifespan(app: FastAPI):
         await _resume_stuck_books()
 
     yield
-    # Shutdown: close HTTP client
+    # Shutdown: close HTTP clients
     await ai_client.close()
+    close_tool_client()
     logger.info("Hullucinator shut down.")
 
 

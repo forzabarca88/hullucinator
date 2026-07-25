@@ -10,7 +10,8 @@ Directory layout:
     ├── data/
     │   ├── config.json
     │   └── books/          # one JSON file per book
-    └── exports/            # exported EPUB/PDF files
+    ├── exports/            # exported EPUB/PDF files
+    └── covers/             # generated cover images (PNG)
 
 Works on both Linux and Windows (Path.home() resolves to the
 platform-appropriate home directory).
@@ -27,6 +28,7 @@ HULLUCINATOR_DATA_DIR: Path = Path.home() / ".hullucinator_data"
 DATA_DIR: Path = HULLUCINATOR_DATA_DIR / "data"
 BOOKS_DIR: Path = DATA_DIR / "books"
 EXPORTS_DIR: Path = HULLUCINATOR_DATA_DIR / "exports"
+COVERS_DIR: Path = HULLUCINATOR_DATA_DIR / "covers"
 CONFIG_FILE: Path = DATA_DIR / "config.json"
 
 
@@ -35,21 +37,23 @@ def set_test_dirs(test_root: Path):
 
     Call this in test fixtures to isolate tests from the real data directory.
     """
-    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, CONFIG_FILE
+    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, COVERS_DIR, CONFIG_FILE
     HULLUCINATOR_DATA_DIR = test_root
     DATA_DIR = test_root / "data"
     BOOKS_DIR = DATA_DIR / "books"
     EXPORTS_DIR = test_root / "exports"
+    COVERS_DIR = test_root / "covers"
     CONFIG_FILE = DATA_DIR / "config.json"
 
 
 def reset_to_defaults():
     """Restore storage paths to the real ~/.hullucinator_data defaults."""
-    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, CONFIG_FILE
+    global HULLUCINATOR_DATA_DIR, DATA_DIR, BOOKS_DIR, EXPORTS_DIR, COVERS_DIR, CONFIG_FILE
     HULLUCINATOR_DATA_DIR = Path.home() / ".hullucinator_data"
     DATA_DIR = HULLUCINATOR_DATA_DIR / "data"
     BOOKS_DIR = DATA_DIR / "books"
     EXPORTS_DIR = HULLUCINATOR_DATA_DIR / "exports"
+    COVERS_DIR = HULLUCINATOR_DATA_DIR / "covers"
     CONFIG_FILE = DATA_DIR / "config.json"
 
 def ensure_data_dir():
@@ -60,6 +64,10 @@ def ensure_data_dir():
 def ensure_exports_dir():
     """Create the exports/ directory under ~/.hullucinator_data/."""
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+def ensure_covers_dir():
+    """Create the covers/ directory under ~/.hullucinator_data/."""
+    COVERS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Book persistence ──────────────────────────────────────────────────
@@ -132,3 +140,43 @@ def load_config() -> Optional[AIConfig]:
         data = json.load(f)
     # API key is never persisted; it must come from env var or runtime update
     return AIConfig(**data)
+
+
+# ── Cover image persistence ───────────────────────────────────────────
+
+def save_cover_image(book_id: str, image_bytes: bytes, format: str = "png") -> str:
+    """Save a cover image to disk. Returns the relative path stored in BookState.cover_image.
+
+    The format parameter preserves the original file extension (e.g., 'png', 'jpg', 'webp')
+    so that MIME type detection and EPUB/PDF export work correctly.
+    """
+    ensure_covers_dir()
+    ext = f".{format}" if not format.startswith(".") else format
+    file_path = COVERS_DIR / f"{book_id}{ext}"
+    file_path.write_bytes(image_bytes)
+    return f"covers/{book_id}{ext}"
+
+
+def load_cover_image(book_id: str, format: str = "png") -> Optional[bytes]:
+    """Load a cover image from disk. Returns None if file doesn't exist.
+
+    The format parameter must match the extension used when saving.
+    """
+    ext = f".{format}" if not format.startswith(".") else format
+    file_path = COVERS_DIR / f"{book_id}{ext}"
+    if not file_path.exists():
+        return None
+    return file_path.read_bytes()
+
+
+def delete_cover_image(book_id: str, format: str = "png") -> bool:
+    """Delete a cover image from disk. Returns True if deleted, False if not found.
+
+    The format parameter must match the extension used when saving.
+    """
+    ext = f".{format}" if not format.startswith(".") else format
+    file_path = COVERS_DIR / f"{book_id}{ext}"
+    if not file_path.exists():
+        return False
+    file_path.unlink()
+    return True

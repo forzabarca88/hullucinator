@@ -26,6 +26,7 @@ from app.ai_client import AIClient, ReviewerClient, _extract_content
 from app.storage import save_book, load_config
 from app.schemas import BookState
 from app.config import get_default_shared_config
+from app.web_grounding import WebGroundingClient
 
 # Re-export from status module
 from app.status import (
@@ -92,13 +93,13 @@ class Orchestrator:
     new modular components.
     """
 
-    def __init__(self, ai_client: AIClient, reviewer_client: Optional[ReviewerClient] = None):
+    def __init__(self, ai_client: AIClient, reviewer_client: Optional[WebGroundingClient] = None):
         self.ai_client = ai_client
         # Reviewer client for critique tasks (may use different endpoint/model)
         # If None, falls back to the main ai_client
         self.reviewer_client = reviewer_client
 
-    def _get_reviewer(self) -> AIClient | ReviewerClient:
+    def _get_reviewer(self) -> WebGroundingClient:
         """Return the client to use for review tasks."""
         return self.reviewer_client if self.reviewer_client else self.ai_client
 

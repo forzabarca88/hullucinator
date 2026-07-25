@@ -10,8 +10,8 @@ from httpx import AsyncClient, ASGITransport
 
 from app.main import app, ai_client
 from app.storage import (
-    BOOKS_DIR, CONFIG_FILE, EXPORTS_DIR,
-    ensure_data_dir, ensure_exports_dir,
+    BOOKS_DIR, CONFIG_FILE, EXPORTS_DIR, COVERS_DIR,
+    ensure_data_dir, ensure_exports_dir, ensure_covers_dir,
     set_test_dirs, reset_to_defaults,
 )
 
@@ -53,6 +53,7 @@ def _isolate_api_tests(tmp_path):
     # Ensure temp directories exist
     ensure_data_dir()
     ensure_exports_dir()
+    ensure_covers_dir()
 
     yield
 
@@ -151,6 +152,45 @@ class TestConfigEndpoints:
         assert data["endpoint_url"] == "http://test-endpoint.com"
         assert data["model_name"] == "test-model"
         assert data["api_key_set"] is True
+
+    @pytest.mark.asyncio
+    async def test_web_grounding_toggle(self, client):
+        """POST /api/config can toggle allow_web_grounding and it persists."""
+        # Default is False
+        resp = await client.get("/api/config")
+        assert resp.json()["allow_web_grounding"] is False
+
+        # Enable it
+        resp = await client.post("/api/config", json={
+            "endpoint_url": "http://localhost:8080",
+            "model_name": "gpt-4o",
+            "api_key": "test-key",
+            "allow_web_grounding": True,
+        })
+        assert resp.json()["config"]["allow_web_grounding"] is True
+
+        # Verify it persists through get
+        resp = await client.get("/api/config")
+        assert resp.json()["allow_web_grounding"] is True
+
+        # Disable it
+        resp = await client.post("/api/config", json={
+            "allow_web_grounding": False,
+        })
+        assert resp.json()["config"]["allow_web_grounding"] is False
+
+        # Verify disabled
+        resp = await client.get("/api/config")
+        assert resp.json()["allow_web_grounding"] is False
+
+    @pytest.mark.asyncio
+    async def test_config_schema_includes_tools(self, client):
+        """GET /api/config-schema includes tools section with allow_web_grounding."""
+        resp = await client.get("/api/config-schema")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "tools" in data
+        assert data["tools"]["allow_web_grounding"] is False
 
     @pytest.mark.asyncio
     async def test_validate_config_no_endpoint(self, client):
@@ -666,6 +706,72 @@ class TestRetryEndpoint:
             resp = await client.get(f"/api/books/{old_id}")
             assert resp.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_retry_preserves_cover_image(self, client):
+        """Retry preserves cover_image path and copies the cover file to the new book."""
+        # Import COVERS_DIR inside the test to get the redirected (tmp_path) value
+        from app.storage import COVERS_DIR as _COVERS_DIR
+
+        ai_client.endpoint_url = "http://localhost:8080"
+        ai_client.model_name = "gpt-4o"
+        ai_client.api_key = "test-key"
+
+        async def mock_list_models(self):
+            return [{"id": "gpt-4o", "name": "gpt-4o"}]
+
+        with patch.object(type(ai_client), "list_models", mock_list_models):
+            # Create a book
+            resp = await client.post("/api/books/create", json={
+                "title": "Cover Retry Test",
+                "prompt": "A book with a cover",
+                "tags": ["sci-fi"],
+                "length": "novella",
+            })
+            assert resp.status_code == 200
+            old_book = resp.json()
+            old_id = old_book["book_id"]
+
+            # Upload a cover image (webp format)
+            webp_data = b'RIFF' + b'\x00' * 100 + b'WEBP'
+            resp = await client.post(
+                f"/api/books/{old_id}/cover",
+                files={"file": ("cover.webp", webp_data, "image/webp")},
+            )
+            assert resp.status_code == 200
+            old_cover_path = resp.json()["cover_image"]
+            assert old_cover_path == f"covers/{old_id}.webp"
+
+            # Verify the cover file exists
+            cover_file = _COVERS_DIR / f"{old_id}.webp"
+            assert cover_file.exists()
+
+            # Retry the book
+            resp = await client.post(f"/api/books/{old_id}/retry")
+            assert resp.status_code == 200
+            retry_response = resp.json()
+            new_book_id = retry_response["book_id"]
+            assert new_book_id != old_id
+
+            # Fetch the new book to verify cover_image was preserved
+            resp = await client.get(f"/api/books/{new_book_id}")
+            assert resp.status_code == 200
+            new_book = resp.json()
+            assert new_book["cover_image"] == f"covers/{new_book_id}.webp"
+
+            # Verify the new cover file exists with correct format
+            new_cover_file = _COVERS_DIR / f"{new_book_id}.webp"
+            assert new_cover_file.exists()
+            # Verify content was copied
+            assert new_cover_file.read_bytes() == webp_data
+
+            # Old cover file should be deleted
+            assert not cover_file.exists()
+
+            # Verify cover serves correctly
+            resp = await client.get(f"/api/books/{new_book_id}/cover")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "image/webp"
+
 
 class TestResumeEndpoint:
     """Test the POST /api/books/{id}/resume endpoint."""
@@ -830,3 +936,259 @@ class TestResumeEndpoint:
             # Chapter 1 content should be preserved (resume doesn't regenerate existing chapters)
             assert "Chapter 1: The Call" in book["chapters"]
             assert book["chapters"]["Chapter 1: The Call"] == "Original chapter 1 content"
+
+
+class TestCoverEndpoints:
+    """Test cover image upload, retrieval, and deletion endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def _ensure_covers_dir(self):
+        """Ensure the covers directory exists for cover endpoint tests."""
+        ensure_covers_dir()
+
+    @pytest.mark.asyncio
+    async def test_upload_cover_success(self, client):
+        """POST /api/books/{id}/cover uploads a valid PNG cover image."""
+        # Create a book first
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="Cover Test",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        # Upload a valid PNG (minimal valid PNG header)
+        png_data = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        resp = await client.post(
+            f"/api/books/{book_id}/cover",
+            files={"file": ("cover.png", png_data, "image/png")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["cover_image"] == f"covers/{book_id}.png"
+
+        # Verify book state was updated
+        resp = await client.get(f"/api/books/{book_id}")
+        book = resp.json()
+        assert book["cover_image"] == f"covers/{book_id}.png"
+
+    @pytest.mark.asyncio
+    async def test_upload_cover_nonexistent_book(self, client):
+        """POST /api/books/{id}/cover returns 404 for unknown book."""
+        png_data = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        resp = await client.post(
+            "/api/books/nonexistent-id/cover",
+            files={"file": ("cover.png", png_data, "image/png")},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_upload_cover_invalid_format(self, client):
+        """POST /api/books/{id}/cover rejects unsupported image formats."""
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="Cover Test",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        # Try uploading a GIF (not allowed)
+        gif_data = b'GIF89a' + b'\x00' * 100
+        resp = await client.post(
+            f"/api/books/{book_id}/cover",
+            files={"file": ("cover.gif", gif_data, "image/gif")},
+        )
+        assert resp.status_code == 400
+        assert "Invalid image format" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_upload_cover_too_large(self, client):
+        """POST /api/books/{id}/cover rejects images over 5MB."""
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="Cover Test",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        # Send a file larger than 5MB
+        large_data = b'\x89PNG\r\n\x1a\n' + b'\x00' * (5 * 1024 * 1024 + 1)
+        resp = await client.post(
+            f"/api/books/{book_id}/cover",
+            files={"file": ("cover.png", large_data, "image/png")},
+        )
+        assert resp.status_code == 400
+        assert "too large" in resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_get_cover_success(self, client):
+        """GET /api/books/{id}/cover serves the cover image."""
+        from app.schemas import BookState
+        from app.storage import save_book, save_cover_image
+        import uuid
+        book_id = str(uuid.uuid4())
+        cover_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        cover_path = save_cover_image(book_id, cover_bytes)
+
+        book_state = BookState(
+            id=book_id,
+            title="Cover Test",
+            prompt="A test book",
+            status="pending",
+            cover_image=cover_path,
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.get(f"/api/books/{book_id}/cover")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+
+    @pytest.mark.asyncio
+    async def test_get_cover_no_cover_set(self, client):
+        """GET /api/books/{id}/cover returns 404 when no cover is set."""
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="No Cover Book",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.get(f"/api/books/{book_id}/cover")
+        assert resp.status_code == 404
+        assert "No cover image" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_get_cover_nonexistent_book(self, client):
+        """GET /api/books/{id}/cover returns 404 for unknown book."""
+        resp = await client.get("/api/books/nonexistent-id/cover")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_cover_success(self, client):
+        """DELETE /api/books/{id}/cover removes the cover image."""
+        from app.schemas import BookState
+        from app.storage import save_book, save_cover_image
+        import uuid
+        book_id = str(uuid.uuid4())
+        cover_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        cover_path = save_cover_image(book_id, cover_bytes)
+
+        book_state = BookState(
+            id=book_id,
+            title="Cover Test",
+            prompt="A test book",
+            status="pending",
+            cover_image=cover_path,
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.delete(f"/api/books/{book_id}/cover")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "cover_deleted"
+        assert data["book_id"] == book_id
+
+        # Verify book state was cleared
+        resp = await client.get(f"/api/books/{book_id}")
+        book = resp.json()
+        assert book["cover_image"] is None
+
+        # Verify file was deleted
+        cover_file = COVERS_DIR / f"{book_id}.png"
+        assert not cover_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_cover_no_cover_set(self, client):
+        """DELETE /api/books/{id}/cover returns 404 when no cover is set."""
+        from app.schemas import BookState
+        from app.storage import save_book
+        import uuid
+        book_id = str(uuid.uuid4())
+        book_state = BookState(
+            id=book_id,
+            title="No Cover Book",
+            prompt="A test book",
+            status="pending",
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.delete(f"/api/books/{book_id}/cover")
+        assert resp.status_code == 404
+        assert "No cover image" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_delete_cover_nonexistent_book(self, client):
+        """DELETE /api/books/{id}/cover returns 404 for unknown book."""
+        resp = await client.delete("/api/books/nonexistent-id/cover")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_list_books_includes_cover_image(self, client):
+        """GET /api/books response includes cover_image field."""
+        from app.schemas import BookState
+        from app.storage import save_book, save_cover_image
+        import uuid
+        book_id = str(uuid.uuid4())
+        cover_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        cover_path = save_cover_image(book_id, cover_bytes)
+
+        book_state = BookState(
+            id=book_id,
+            title="Cover Book",
+            prompt="A test book",
+            status="pending",
+            cover_image=cover_path,
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.get("/api/books")
+        assert resp.status_code == 200
+        books = resp.json()
+        assert len(books) == 1
+        assert "cover_image" in books[0]
+        assert books[0]["cover_image"] == cover_path
+
+    @pytest.mark.asyncio
+    async def test_get_book_status_includes_cover_image(self, client):
+        """GET /api/books/{id} response includes cover_image field."""
+        from app.schemas import BookState
+        from app.storage import save_book, save_cover_image
+        import uuid
+        book_id = str(uuid.uuid4())
+        cover_bytes = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+        cover_path = save_cover_image(book_id, cover_bytes)
+
+        book_state = BookState(
+            id=book_id,
+            title="Cover Book",
+            prompt="A test book",
+            status="pending",
+            cover_image=cover_path,
+        )
+        save_book(book_id, book_state)
+
+        resp = await client.get(f"/api/books/{book_id}")
+        assert resp.status_code == 200
+        book = resp.json()
+        assert "cover_image" in book
+        assert book["cover_image"] == cover_path

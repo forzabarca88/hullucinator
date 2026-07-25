@@ -12,6 +12,7 @@ Generate complete e-books from a simple prompt. Provide a title, topic, genre ta
 - **Separate reviewer** — Optional different LLM endpoint/model for unbiased review
 - **Configurable max review turns** — Control review depth per-book or globally (default: 2 turns)
 - **Auto-correction** — Identified issues are corrected with full per-turn audit trail
+- **Web grounding** — Optional Wikipedia and web search tool calling lets the LLM fact-check during generation and review
 - **Configurable AI provider** — Change endpoint URL, API key, model, and reviewer settings from the GUI at runtime
 - **Config persistence** — AI settings saved to disk and restored on restart (API keys excluded for security)
 - **Model discovery** — Fetch available models from your LLM provider

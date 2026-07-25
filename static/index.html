@@ -92,6 +92,13 @@
           <input id="setupChunkSize" type="number" min="1" max="20" value="5">
           <span class="field-hint">Number of chapters reviewed at once during chunked review.</span>
         </div>
+        <div class="field">
+          <label class="checkbox-label">
+            <input type="checkbox" id="setupWebGrounding">
+            <span>Allow Web Grounding</span>
+          </label>
+          <span class="field-hint">Enables Wikipedia and web search during generation for fact-checked content.</span>
+        </div>
       </div>
 
       <div class="setup-actions">
@@ -140,8 +147,15 @@
         <div class="form-col">
           <label for="maxTurns">Max Review Turns</label>
           <select id="maxTurns"></select>
-          </select>
         </div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label">
+          <input type="checkbox" id="skipReview">
+          <span>Skip Review</span>
+        </label>
+        <span class="field-hint">Bypass the review step for quick drafts.</span>
       </div>
 
       <div class="form-actions">
@@ -254,10 +268,20 @@
       <input id="cfgChunkSize" type="number" min="1" max="20" value="5">
       <span class="field-hint">Chapters reviewed at once during chunked review.</span>
     </div>
+    <div class="field">
+      <label class="checkbox-label">
+        <input type="checkbox" id="cfgWebGrounding">
+        <span>Allow Web Grounding</span>
+      </label>
+      <span class="field-hint">Enables Wikipedia and web search during generation for fact-checked content.</span>
+    </div>
   </div>
 
   <button class="btn btn-primary" id="saveConfigBtn">Save Changes</button>
 </div>
+
+<!-- Hidden file input for cover uploads -->
+<input type="file" id="coverFileInput" accept="image/*" style="display:none">
 
 <!-- ── Scripts (order matters: config → ui → renderers → app → settings → boot) ── -->
 <script src="/static/js/config.js"></script>

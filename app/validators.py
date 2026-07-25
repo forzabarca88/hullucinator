@@ -60,21 +60,10 @@ def validate_book_state(book: BookState) -> Dict[str, Any]:
         errors.append("Outline is missing.")
 
     if book.outline and book.chapters:
-        # Parse outline to get expected chapter count
-        outline_lines = book.outline.strip().split("\n")
-        outline_chapters = []
-        import re
-        for line in outline_lines:
-            line = line.strip()
-            if not line:
-                continue
-            match = re.match(r"\d+[\)\.]\s*(.+)", line)
-            if match:
-                outline_chapters.append(match.group(1).strip())
-
-        if len(book.chapters) != len(outline_chapters):
+        # Outline is already a list of chapter titles — use directly
+        if len(book.chapters) != len(book.outline):
             errors.append(
-                f"Chapter count ({len(book.chapters)}) does not match the outline ({len(outline_chapters)})."
+                f"Chapter count ({len(book.chapters)}) does not match the outline ({len(book.outline)})."
             )
 
     # Validate chapter content

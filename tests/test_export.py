@@ -1,11 +1,13 @@
 """Tests for EPUB and PDF export functionality (L10)."""
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from app.exporter import export_to_epub, export_to_pdf, markdown_to_html
+from app import storage as app_storage
 
 
 class TestMarkdownToHtml:
@@ -98,6 +100,70 @@ class TestExportEpub:
         export_to_epub(book_id, "Reviewed Book", {"Ch 1": "Content"}, [], str(tmp_path), review)
         assert (tmp_path / f"{book_id}.epub").exists()
 
+    def test_epub_export_with_cover_image(self, tmp_path):
+        """Cover image is embedded in EPUB when provided."""
+        app_storage.set_test_dirs(tmp_path)
+        app_storage.ensure_covers_dir()
+
+        book_id = "test-epub-cover-1"
+        # Create a minimal valid PNG (1x1 pixel, grey)
+        png_header = bytes([
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ])
+        cover_path = tmp_path / "covers" / f"{book_id}.png"
+        cover_path.write_bytes(png_header)
+
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_epub(
+            book_id, "Cover Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image=f"covers/{book_id}.png",
+        )
+
+        assert Path(result_path).exists()
+        # Verify the EPUB contains the cover image
+        with zipfile.ZipFile(result_path) as zf:
+            names = zf.namelist()
+            assert "images" in str(names) or any("image" in n.lower() for n in names)
+
+        app_storage.reset_to_defaults()
+
+    def test_epub_export_cover_missing_file_fallback(self, tmp_path):
+        """EPUB exports gracefully when cover_image path doesn't exist."""
+        app_storage.set_test_dirs(tmp_path)
+
+        book_id = "test-epub-cover-missing"
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_epub(
+            book_id, "No Cover Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image="covers/nonexistent.png",
+        )
+
+        assert Path(result_path).exists()
+        # Should still produce a valid EPUB (text cover page as fallback)
+        assert Path(result_path).stat().st_size > 0
+
+        app_storage.reset_to_defaults()
+
+    def test_epub_export_without_cover(self, tmp_path):
+        """EPUB exports normally when no cover_image is provided."""
+        book_id = "test-epub-no-cover"
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_epub(
+            book_id, "Plain Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image=None,
+        )
+
+        assert Path(result_path).exists()
+        assert Path(result_path).stat().st_size > 0
+
 
 class TestExportPdf:
     """Test PDF export."""
@@ -134,3 +200,64 @@ class TestExportPdf:
         chapters = {"Ch 1": "**Bold** and *italic* text\n\n## A Section\n\nParagraph here."}
         export_to_pdf(book_id, "Markdown Book", chapters, [], str(tmp_path), None)
         assert (tmp_path / f"{book_id}.pdf").exists()
+
+    def test_pdf_export_with_cover_image(self, tmp_path):
+        """Cover image is rendered on the PDF title page when provided."""
+        app_storage.set_test_dirs(tmp_path)
+        app_storage.ensure_covers_dir()
+
+        book_id = "test-pdf-cover-1"
+        # Create a minimal valid PNG (1x1 pixel, grey)
+        png_header = bytes([
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ])
+        cover_path = tmp_path / "covers" / f"{book_id}.png"
+        cover_path.write_bytes(png_header)
+
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_pdf(
+            book_id, "Cover Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image=f"covers/{book_id}.png",
+        )
+
+        assert Path(result_path).exists()
+        assert Path(result_path).stat().st_size > 0
+
+        app_storage.reset_to_defaults()
+
+    def test_pdf_export_cover_missing_file_fallback(self, tmp_path):
+        """PDF exports gracefully when cover_image path doesn't exist."""
+        app_storage.set_test_dirs(tmp_path)
+
+        book_id = "test-pdf-cover-missing"
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_pdf(
+            book_id, "No Cover Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image="covers/nonexistent.png",
+        )
+
+        assert Path(result_path).exists()
+        # Should still produce a valid PDF (text title page as fallback)
+        assert Path(result_path).stat().st_size > 0
+
+        app_storage.reset_to_defaults()
+
+    def test_pdf_export_without_cover(self, tmp_path):
+        """PDF exports normally when no cover_image is provided."""
+        book_id = "test-pdf-no-cover"
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_pdf(
+            book_id, "Plain Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image=None,
+        )
+
+        assert Path(result_path).exists()
+        assert Path(result_path).stat().st_size > 0

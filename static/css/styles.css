@@ -255,6 +255,24 @@ select {
   font-weight: 500;
 }
 
+/* Checkbox label — inline checkbox with text */
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-family: var(--body-font);
+  font-size: 0.95rem;
+  color: var(--ink);
+  margin-bottom: 0.2rem;
+}
+.checkbox-label input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--ink);
+  cursor: pointer;
+}
+
 /* Inline input group (input + button side by side) */
 .input-row {
   display: flex;
@@ -412,6 +430,30 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Book Cover Image on Card ──────────────────────────────────── */
+.book-cover {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 2px;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--vellum);
+}
+
+/* ── Book Cover Preview in Detail Modal ────────────────────────── */
+.detail-cover {
+  max-width: 240px;
+  max-height: 360px;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 2px;
+  display: block;
+  margin: 0 auto 1rem;
+  border: 1px solid var(--vellum);
+  box-shadow: 0 2px 8px rgba(44,36,22,0.1);
 }
 
 /* Delete button on book card */
@@ -1171,5 +1213,7 @@ select {
   .form-row { flex-direction: column; }
   .book-card { padding: 1rem 1.25rem; }
   .book-card .book-title { font-size: 15px; }
+  .book-cover { aspect-ratio: 16 / 10; }
+  .detail-cover { max-width: 180px; max-height: 270px; }
   .review-score { font-size: 28px; }
 }
