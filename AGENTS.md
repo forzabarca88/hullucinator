@@ -65,7 +65,9 @@ Config sub-models:
 
 **Web grounding enables factual research during generation and review.** When `allow_web_grounding` is enabled in config, the generation and review pipelines use tool calling to query Wikipedia and DuckDuckGo for factual information. Tool calling falls back gracefully to regular completion when the endpoint doesn't support it.
 
-**Shared module architecture.** `_is_web_grounding_enabled()` and `_generate_with_optional_tools()` live in `app/web_grounding.py` and are imported by both `generation.py` and `review.py`. The `WebGroundingClient` protocol type (in `web_grounding.py`) provides consistent typing for clients that support tool calling.
+**Shared module architecture.** `_is_web_grounding_enabled()`, `_inject_date_to_system_messages()`, and `_generate_with_optional_tools()` live in `app/web_grounding.py` and are imported by both `generation.py` and `review.py`. The `WebGroundingClient` protocol type (in `web_grounding.py`) provides consistent typing for clients that support tool calling.
+
+**Date injection for temporal context.** When web grounding is enabled, `_generate_with_optional_tools()` injects the current UTC date and time into system messages via `_inject_date_to_system_messages()`. This gives the LLM temporal context so it can make informed factual searches rather than relying on training data cut-off dates. Date injection is skipped when web grounding is disabled. The original messages list is not mutated — a new list is returned with date appended to each system message.
 
 **Persistent HTTP client with User-Agent.** Tool calls use a module-level persistent `httpx.AsyncClient` in `app/tools.py` with a `User-Agent` header. Both Wikipedia and DuckDuckGo APIs reject requests without a proper User-Agent, returning 403/202 respectively. The client is closed during application shutdown via `close_tool_client()`.
 
