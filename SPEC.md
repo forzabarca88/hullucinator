@@ -166,7 +166,7 @@ Credentials are validated before saving. On success, the wizard dismisses and th
 ### Library
 
 Displays all books as cards showing:
-- The image cover (if assigned)
+- Book Cover (if assigned) - it should be scaled at a smaller size so that any one book image does not dominate the view
 - Title, status badge (color-coded), length tier, genre tags
 - Prompt preview (truncated)
 - Progress bar with percentage (color: teal during generation, green on completion, red on failure)
@@ -178,6 +178,7 @@ Library auto-refreshes when active books are generating; stops polling when all 
 ### Book Detail Modal
 
 Clicking a book card opens a modal with:
+- **Book Cover** (if assigned) - Image for the book cover, it should be scaled at an appropriate size for the card
 - **Settings** — Original creation parameters (prompt, length, tags, review turns)
 - **Status** — Current status badge
 - **Progress** — Progress bar, percentage, chapter count, error message (if failed)
