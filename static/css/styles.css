@@ -121,7 +121,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus, summary:focus,
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 2rem;
-  background: transparent;
+  background: var(--paper);
   border-bottom: 1px solid var(--vellum);
   position: sticky;
   top: 0;
@@ -434,18 +434,22 @@ select {
 
 /* ── Book Cover Image on Card ──────────────────────────────────── */
 .book-cover {
+  max-width: 180px;
   width: 100%;
   aspect-ratio: 2 / 3;
   object-fit: cover;
   border-radius: 2px;
   margin-bottom: 0.6rem;
   border: 1px solid var(--vellum);
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* ── Book Cover Preview in Detail Modal ────────────────────────── */
 .detail-cover {
-  max-width: 240px;
-  max-height: 360px;
+  max-width: 300px;
+  max-height: 450px;
   width: 100%;
   aspect-ratio: 2 / 3;
   object-fit: cover;
@@ -1213,7 +1217,7 @@ select {
   .form-row { flex-direction: column; }
   .book-card { padding: 1rem 1.25rem; }
   .book-card .book-title { font-size: 15px; }
-  .book-cover { aspect-ratio: 16 / 10; }
+  .book-cover { max-width: 140px; }
   .detail-cover { max-width: 180px; max-height: 270px; }
   .review-score { font-size: 28px; }
 }
