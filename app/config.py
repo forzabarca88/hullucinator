@@ -160,6 +160,8 @@ class UISchema(BaseModel):
 class ToolConfig(BaseModel):
     """Tool calling configuration."""
     allow_web_grounding: bool = Field(default=False, description="Enable tool calls for Wikipedia and web search during generation")
+    max_retries: int = Field(default=3, ge=1, le=10, description="Max retry attempts for each tool call")
+    retry_delay: float = Field(default=1.0, ge=0.1, description="Base delay in seconds between tool call retries")
 
 
 class SharedConfig(BaseModel):
@@ -237,5 +239,9 @@ DEFAULT_SHARED_CONFIG = SharedConfig(
         prompt_warn_threshold=10000,
         title_max_length=200,
     ),
-    tools=ToolConfig(),
+    tools=ToolConfig(
+        allow_web_grounding=False,
+        max_retries=3,
+        retry_delay=1.0,
+    ),
 )
