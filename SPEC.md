@@ -64,6 +64,12 @@ The primary LLM endpoint used for summary, outline, chapter generation, and chap
 
 A separate LLM endpoint dedicated to critique tasks. Can use a different endpoint, model, and API key from the writer. When not configured, the writer provider is used for review tasks.
 
+### Tooling Calling Capability
+
+A boolean selection (default to True) called `Allow Web Grounding` which allows the LLM across **ALL** book generation stages to use tools calls for:
+- Searching and retrieving Wikipedia content
+- Running and referring to web search
+
 ### Credential Validation
 
 Before queuing any book for generation, retry, or review, the system validates API credentials by sending a lightweight test request to the provider's models endpoint. This prevents books from being queued when credentials are invalid.
