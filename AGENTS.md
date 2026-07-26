@@ -33,13 +33,27 @@ A FastAPI application with a web interface that orchestrates LLM calls to genera
 **All tunable parameters flow from `app/config.py`.** This includes temperatures, system prompts, validation thresholds, concurrency limits, and UI settings. Never hardcode values in other modules — always reference the shared config. The frontend reads the same config via `GET /api/config-schema` to stay in sync.
 
 Config sub-models:
-- `GenerationConfig` — temperatures, system prompts, min chapter chars
+- `GenerationConfig` — temperatures, system prompts, min chapter chars, outline_max_retries
 - `ReviewConfig` — max turns, pass/fail scores, word thresholds, chunk size
 - `ClientConfig` — retry counts, timeouts, jitter
 - `ConcurrencyConfig` — max simultaneous generations
 - `ValidationConfig` — validation thresholds
 - `UISchema` — polling intervals, input limits
 - `ToolConfig` — web grounding toggle, tool retry count and delay (Wikipedia + web search during generation)
+
+## Prompt Alignment
+
+**System prompts are content-agnostic.** All system prompts in `GenerationConfig` use neutral language ("content generation assistant", "content reviewer") rather than fiction-specific framing ("creative writing assistant", "book critic"). This prevents the LLM from biasing toward narrative fiction when the user requests factual, informational, or reference content.
+
+**The user's original prompt is threaded through every pipeline step.** After summary generation, the original `book.prompt` is included in outline generation, chapter generation (both initial and resume), review critique, and revision context. This ensures each step stays anchored to what the user actually asked for, rather than drifting based on the summary alone.
+
+**Review checks for prompt alignment.** The critique system prompts instruct the reviewer to first verify the content faithfully addresses the user's original request before checking for other issues (continuity, tone, pacing). Misalignment with the user's request is treated as an issue type.
+
+**Temperature settings.** Summary generation uses temperature 1.0 (creative synthesis of the user's prompt). Outline uses 0.7 and chapter generation uses 0.8 (balanced between creativity and fidelity). Chapter summaries use 0.3 (concise, faithful). Critique uses 0.5 and revision uses 0.7.
+
+## Outline Validation
+
+**Outline generation has retry guardrails.** The `generate_outline` function validates that the number of chapters produced by the LLM falls within the allowed range for the book's length tier. If the count is outside the range, the outline is rejected and regenerated up to `generation.outline_max_retries` times (default 3). After all retries are exhausted, a `ValueError` is raised to fail the book rather than silently trimming or padding chapters, which would cause continuity issues.
 
 ## Extending the System
 
@@ -69,9 +83,11 @@ Config sub-models:
 
 **Date injection for temporal context.** When web grounding is enabled, `_generate_with_optional_tools()` injects the current UTC date and time into system messages via `_inject_date_to_system_messages()`. This gives the LLM temporal context so it can make informed factual searches rather than relying on training data cut-off dates. Date injection is skipped when web grounding is disabled. The original messages list is not mutated — a new list is returned with date appended to each system message.
 
-**Persistent HTTP client with User-Agent.** Tool calls use a module-level persistent `httpx.AsyncClient` in `app/tools.py` with a `User-Agent` header. Both Wikipedia and DuckDuckGo APIs reject requests without a proper User-Agent, returning 403/202 respectively. The client is closed during application shutdown via `close_tool_client()`.
+**Wikipedia search uses persistent HTTP client.** Wikipedia tool calls use a module-level persistent `httpx.AsyncClient` in `app/tools.py` with a `User-Agent` header (the Wikipedia API rejects requests without one). The client is closed during application shutdown via `close_tool_client()`.
 
-**Tool call retries.** Both Wikipedia and web search tools retry on transient failures (connection errors, timeouts, 5xx server errors) up to `ToolConfig.max_retries` times (default 3) with exponential backoff and jitter. Non-transient errors (404, 403, 400) are not retried. Retry delay and jitter are configured via `ToolConfig.retry_delay` and `ClientConfig.jitter_factor`.
+**Web search uses ddgs package.** Web search uses the `ddgs` package (DuckDuckGo HTML search) instead of httpx scraping. The synchronous `DDGS` client is run inside `asyncio.to_thread` to avoid blocking the event loop.
+
+**Retryable errors include both httpx and standard library types.** The `_RETRYABLE_ERRORS` tuple in `app/tools.py` includes `httpx` errors (`ConnectError`, `ConnectTimeout`, `ReadTimeout`, `PoolTimeout`, `NetworkError`) for Wikipedia, plus `ConnectionError` and `TimeoutError` from the standard library for `ddgs` web search. Bare `OSError` is intentionally excluded — while `ConnectionError` and `TimeoutError` are subclasses of `OSError`, catching bare `OSError` is too broad (would match `FileNotFoundError`, `PermissionError`, etc.) and would cause non-transient errors to be retried unnecessarily.
 
 ## Tool Calling
 

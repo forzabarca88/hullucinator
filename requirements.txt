@@ -1,6 +1,7 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 httpx>=0.25.0
+ddgs>=9.0.0
 pydantic>=2.5.0
 ebooklib>=0.18
 fpdf2>=2.0.0

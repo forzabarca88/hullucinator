@@ -5,8 +5,10 @@ Provides tool specifications in OpenAI tool-calling format and
 implementations for each tool. Tools let the LLM fetch external
 information during generation or review.
 
-Uses a persistent httpx.AsyncClient at module level to avoid creating
-a new connection per tool call. Timeout is configurable via shared config.
+Wikipedia search uses a persistent httpx.AsyncClient at module level
+to avoid creating a new connection per call. Timeout is configurable
+via shared config. Web search uses the ddgs package (DuckDuckGo HTML
+search) which manages its own connections.
 """
 import asyncio
 import json
@@ -16,6 +18,7 @@ import re
 from typing import Any, Callable, Dict, List, TypeVar
 
 import httpx
+from ddgs import DDGS
 
 from app.config import get_default_shared_config
 
@@ -31,9 +34,9 @@ _TOOL_MAX_RETRIES = _tool_config.max_retries
 _TOOL_RETRY_DELAY = _tool_config.retry_delay
 _CLIENT_JITTER = _client_config.jitter_factor
 
-# Persistent HTTP client for tool calls (Wikipedia, DuckDuckGo, etc.)
-# Reused across all tool executions to avoid connection overhead.
-# User-Agent header is required by Wikipedia and DuckDuckGo APIs.
+# Persistent HTTP client for Wikipedia search.
+# Reused across all Wikipedia tool executions to avoid connection overhead.
+# User-Agent header is required by the Wikipedia API.
 _tool_client: httpx.AsyncClient = httpx.AsyncClient(
     timeout=float(_client_config.http_timeout),
     headers={"User-Agent": "Hullucinator/1.0 (ebook generator)"},
@@ -69,13 +72,19 @@ def get_tool_client() -> httpx.AsyncClient:
 
 T = TypeVar("T")
 
-# Errors that indicate transient failures worth retrying
+# Errors that indicate transient failures worth retrying.
+# Includes both httpx errors (Wikipedia) and standard library errors (ddgs web search).
+# OSError is intentionally excluded — while ConnectionError and TimeoutError are
+# subclasses of OSError, bare OSError is too broad (catches file-not-found, permission
+# denied, etc.) and would cause non-transient errors to be retried unnecessarily.
 _RETRYABLE_ERRORS = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
     httpx.ReadTimeout,
     httpx.PoolTimeout,
     httpx.NetworkError,
+    ConnectionError,
+    TimeoutError,
 )
 
 # HTTP status codes that indicate transient server errors
@@ -141,14 +150,18 @@ WIKIPEDIA_SEARCH: Dict[str, Any] = {
         "description": (
             "Search Wikipedia for a topic and return a concise summary. "
             "Use this to verify facts, get background information, or "
-            "research real-world references for the book."
+            "research real-world references for the book. "
+            "Query tips: use specific topic names or proper nouns (e.g., ""quantum mechanics"", ""Marie Curie""). "
+            "Avoid overly broad terms like ""science"" — narrow to the specific subject. "
+            "For people, use full names. For events, include the year or date. "
+            "For technical topics, use the standard terminology."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query or topic to look up on Wikipedia.",
+                    "description": "The specific topic, person, event, or concept to look up on Wikipedia.",
                 },
             },
             "required": ["query"],
@@ -163,14 +176,17 @@ WEB_SEARCH: Dict[str, Any] = {
         "description": (
             "Perform a general web search to find current information, "
             "facts, or references. Use this when Wikipedia doesn't have "
-            "the needed information or for more recent topics."
+            "the needed information or for more recent topics. "
+            "Query tips: use specific, focused keywords. Include proper nouns, dates, and names. "
+            "Avoid vague or overly broad terms. Use quotes for exact phrases when needed. "
+            "Break complex topics into multiple focused searches rather than one broad query."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to look up on the web.",
+                    "description": "The specific search query to look up on the web.",
                 },
             },
             "required": ["query"],
@@ -284,43 +300,29 @@ def _strip_html(html: str) -> str:
 
 async def _web_search_impl(query: str) -> str:
     """
-    Perform a web search using DuckDuckGo Instant Answer API.
+    Perform a web search using the ddgs package (DuckDuckGo HTML search).
 
-    Returns the abstract/answer if available, or relevant results.
+    Returns formatted results with title, snippet, and URL for each hit.
+    Runs the synchronous DDGS client in a thread to avoid blocking the event loop.
     Raises transient errors so the retry wrapper can handle them.
     """
-    client = get_tool_client()
-    url = "https://api.duckduckgo.com/"
-    params = {
-        "q": query,
-        "format": "json",
-    }
-    response = await client.get(url, params=params)
-    response.raise_for_status()
-    data = response.json()
+    def _search_sync() -> str:
+        with DDGS() as search:
+            results = search.text(query, max_results=10)
 
-    result_parts = []
+        if not results:
+            return f"No results found for web search '{query}'."
 
-    # Instant answer (abstract)
-    abstract = data.get("Abstract", "")
-    abstract_url = data.get("AbstractURL", "")
-    if abstract:
-        result_parts.append(f"Answer: {abstract}")
-        if abstract_url:
-            result_parts.append(f"Source: {abstract_url}")
+        parts = []
+        for r in results:
+            title = r.get("title", "Unknown")
+            snippet = r.get("body", "")
+            link = r.get("href", "")
+            parts.append(f"Title: {title}\nSnippet: {snippet}\nURL: {link}")
 
-    # Related topics
-    related_topics = data.get("RelatedTopics", [])
-    if related_topics and not abstract:
-        for topic in related_topics[:5]:
-            text = topic.get("Text", "")
-            if text:
-                result_parts.append(text)
+        return "\n\n".join(parts)
 
-    if not result_parts:
-        return f"No results found for web search '{query}'."
-
-    return "\n\n".join(result_parts)
+    return await asyncio.to_thread(_search_sync)
 
 
 # ── Public tool functions (wrapped with retry) ─────────────────────

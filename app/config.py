@@ -49,78 +49,90 @@ class GenerationConfig(BaseModel):
     """Generation pipeline tuning parameters."""
     # Temperature settings per step
     summary_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    outline_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    chapter_temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    outline_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    chapter_temperature: float = Field(default=0.8, ge=0.0, le=2.0)
     chapter_summary_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     critique_temperature: float = Field(default=0.5, ge=0.0, le=2.0)
     revision_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     # Minimum chapter content length (characters) before it's considered valid
     min_chapter_chars: int = Field(default=100, ge=1, description="Minimum characters for a generated chapter to be accepted")
+    # Max retry attempts for outline generation when chapter count is out of range
+    outline_max_retries: int = Field(default=3, ge=1, le=10, description="Max attempts to generate a valid outline before giving up")
     # System prompts for each generation step
     summary_system_prompt: str = Field(
         default=(
-            "You are a creative writing assistant. Generate a compelling one-paragraph summary "
-            "for a {length} in the {tags} genre."
+            "You are a content generation assistant. Generate a concise one-paragraph summary "
+            "that faithfully captures what the user is asking for. Stay close to the user's request — "
+            "do not invent a narrative arc, fictional premise, or creative interpretation unless "
+            "the user explicitly asks for fiction. For factual, informational, or reference content, "
+            "the summary should describe the subject matter and scope accurately."
         ),
-        description="System prompt template for summary generation. Use {length} and {tags} as placeholders."
+        description="System prompt template for summary generation. No format placeholders."
     )
     outline_system_prompt: str = Field(
         default=(
-            "You are a creative writing assistant. Generate a chapter outline for a {length} "
+            "You are a content generation assistant. Generate a chapter outline for a {length} "
             "({word_count} words) in the {tags} genre. "
-            "The book must have {chapter_guidance}."
+            "The book must have {chapter_guidance}. "
+            "The outline must faithfully address the user's original request — do not invent a "
+            "fictional narrative unless the user explicitly asks for one. Structure the chapters "
+            "to cover all aspects the user asked about."
         ),
         description="System prompt template for outline generation. Use {length}, {word_count}, {tags}, {chapter_guidance} as placeholders."
     )
     chapter_system_prompt: str = Field(
         default=(
-            "You are a creative writing assistant. Write chapter {chapter_num} of a {length} "
+            "You are a content generation assistant. Write chapter {chapter_num} of a {length} "
             "in the {tags} genre. Target {word_count} words for the full book. "
-            "Return ONLY plain text narrative — do NOT wrap output in JSON or code blocks."
+            "Faithfully address the user's original request — do not invent a fictional narrative "
+            "unless the user explicitly asks for one. Stay aligned with what the user asked for. "
+            "Return ONLY plain text content — do NOT wrap output in JSON or code blocks."
         ),
         description="System prompt template for chapter generation. Use {chapter_num}, {length}, {tags}, {word_count} as placeholders."
     )
     chapter_summary_system_prompt: str = Field(
         default=(
-            "You are a literary analyst. Summarize the following chapter in a single, concise paragraph "
-            "(2-4 sentences) capturing the key events, character developments, and any plot threads "
-            "that carry forward to the next chapter."
+            "Summarize the following chapter in a single, concise paragraph "
+            "(2-4 sentences) capturing the key content, main points, and any information "
+            "that carries forward to subsequent chapters."
         ),
         description="System prompt template for chapter summary generation."
     )
     critique_system_prompt: str = Field(
         default=(
-            "You are a professional book critic and editor with decades of experience. "
-            "Review the following book critically. Identify any major issues including:\n"
-            "- Plot holes or logical inconsistencies\n"
-            "- Character inconsistencies (voice, motivation, development)\n"
-            "- Pacing problems (rushed sections, dragging sections)\n"
-            "- Continuity errors (events that contradict earlier chapters)\n"
+            "You are a professional content reviewer and editor. Review the following content critically. "
+            "First, check that the content faithfully addresses the user's original request — identify any "
+            "drift from what was asked for. Then identify any other major issues including:\n"
+            "- Logical inconsistencies or factual errors\n"
+            "- Continuity errors (chapters that contradict each other)\n"
             "- Tone or style inconsistencies across chapters\n"
-            "- Unresolved plot threads or unsatisfying endings\n\n"
+            "- Unresolved topics or incomplete coverage of requested subjects\n"
+            "- Pacing problems (rushed chapters, dragging chapters)\n\n"
             "Return your review as a JSON object with this exact structure:\n"
             '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
             "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
-            "If the book is solid (score >= {pass_score}), set verdict to 'ready' with an empty issues array."
+            "If the content is solid and addresses the user's request (score >= {pass_score}), "
+            "set verdict to 'ready' with an empty issues array."
         ),
         description="System prompt template for critique. Use {pass_score} as placeholder."
     )
     critique_chunk_system_prompt: str = Field(
         default=(
-            "You are a professional book critic and editor. Review the following chapters critically. "
-            "Identify any major issues including plot holes, character inconsistencies, pacing problems, "
-            "continuity errors, tone inconsistencies, and unresolved threads.\n\n"
+            "You are a professional content reviewer and editor. Review the following chapters critically. "
+            "Check that the content faithfully addresses the user's original request — identify any "
+            "drift from what was asked for. Identify any major issues including logical inconsistencies, "
+            "continuity errors, tone inconsistencies, unresolved topics, and pacing problems.\n\n"
             "Return your review as a JSON object with this exact structure:\n"
             '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
-            "Only flag issues in the chapters provided above. Score based on these chapters but consider overall book quality."
+            "Only flag issues in the chapters provided above. Score based on these chapters but consider overall content quality."
         ),
         description="System prompt template for chunked critique."
     )
     revision_system_prompt: str = Field(
         default=(
-            "You are a skilled fiction writer revising a chapter. Rewrite the chapter to address "
-            "the specific issues identified while preserving the core narrative and style. "
-            "Ensure consistency with the rest of the book."
+            "You are a skilled content writer revising a chapter. Rewrite the chapter to address "
+            "the specific issues identified while preserving the core content and style. "
+            "Ensure consistency with the rest of the book and alignment with the user's original request."
         ),
         description="System prompt template for chapter revision."
     )

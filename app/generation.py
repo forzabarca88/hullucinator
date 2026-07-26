@@ -78,16 +78,14 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
     tags_str = ", ".join(book.tags) if book.tags else "no specific genre"
 
     messages = [
-        {"role": "system", "content": (
-            _gen_config.summary_system_prompt.format(length=book.length, tags=tags_str)
-        )},
+        {"role": "system", "content": _gen_config.summary_system_prompt},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
             f"Genre/Tags: {tags_str}\n"
             f"Book length: {book.length} ({LENGTH_WORD_COUNT.get(book.length, 'unknown')} words)\n\n"
             f"User prompt:\n{book.prompt}\n\n"
-            f"Generate a single paragraph summary that captures the core premise, "
-            f"main conflict, and overall direction of the book."
+            f"Generate a single paragraph summary that captures the subject matter, "
+            f"scope, and what the content will cover based on the user's request above."
         )},
     ]
 
@@ -106,7 +104,13 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
 
 
 async def generate_outline(ai_client: AIClient, book: BookState) -> None:
-    """Generate a chapter outline from the book summary."""
+    """Generate a chapter outline from the book summary.
+
+    Retries up to outline_max_retries times if the LLM produces an outline
+    with a chapter count outside the allowed range for the length tier.
+    Raises ValueError on rejection to force a retry rather than silently
+    trimming, which would cause continuity issues.
+    """
     if book.status != "summary_generated":
         raise ValueError(f"Cannot generate outline: book is '{book.status}', expected 'summary_generated'")
 
@@ -114,6 +118,7 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
     chapter_range = LENGTH_CHAPTER_COUNT.get(book.length, "8-15")
     chapter_guidance = _format_chapter_guidance(chapter_range)
     word_guidance = LENGTH_WORD_COUNT.get(book.length, "20,000-50,000")
+    min_chapters, max_chapters = _parse_chapter_range(chapter_range)
 
     messages = [
         {"role": "system", "content": (
@@ -127,31 +132,55 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
             f"Book length: {book.length}\n"
             f"Number of chapters: {chapter_guidance}\n"
             f"Target word count: {word_guidance}\n\n"
+            f"User's original request:\n{book.prompt}\n\n"
             f"Summary:\n{book.summary}\n\n"
             f"Generate a chapter-by-chapter outline as a numbered list. "
+            f"The outline must faithfully address the user's original request above — "
+            f"cover all the topics, details, and scope they asked for. "
             f"Return ONLY the list, one chapter per line, in this format:\n"
             f"1. Chapter Title One\n"
             f"2. Chapter Title Two\n\n"
-            f"IMPORTANT: The outline must contain {chapter_guidance}. Do not add extra chapters. "
+            f"CRITICAL CONSTRAINT: The outline must contain {chapter_guidance}. "
+            f"If you produce more or fewer chapters than allowed, the outline will be rejected. "
+            f"Do NOT add extra chapters beyond the allowed count. "
             f"Do NOT wrap the output in JSON. Do NOT include any explanatory text. "
-            f"Each chapter title should be descriptive and indicate the main focus of that chapter. "
-            f"The outline should show a clear narrative arc from beginning to end."
+            f"Each chapter title should be descriptive and indicate the main focus of that chapter."
         )},
     ]
 
-    _update_progress(book, "Generating outline...", percentage=30)
-    save_book(book.id, book)
+    max_retries = _gen_config.outline_max_retries
 
-    response = await _generate_with_optional_tools(ai_client, messages, _gen_config.outline_temperature)
-    outline_chapters = parse_outline(response, [])
+    for attempt in range(1, max_retries + 1):
+        progress_label = f"Generating outline... (attempt {attempt}/{max_retries})"
+        _update_progress(book, progress_label, percentage=30)
+        save_book(book.id, book)
 
-    # Enforce chapter count to match the length tier
-    min_chapters, max_chapters = _parse_chapter_range(chapter_range)
-    if len(outline_chapters) > max_chapters:
-        logger.warning("Outline for '%s' has %d chapters but %s allows max %d — trimming", book.title, len(outline_chapters), book.length, max_chapters)
-        outline_chapters = outline_chapters[:max_chapters]
-    elif len(outline_chapters) < min_chapters:
-        logger.warning("Outline for '%s' has %d chapters but %s requires min %d", book.title, len(outline_chapters), book.length, min_chapters)
+        response = await _generate_with_optional_tools(ai_client, messages, _gen_config.outline_temperature)
+        outline_chapters = parse_outline(response, [])
+
+        count = len(outline_chapters)
+        if count > max_chapters:
+            reason = f"has {count} chapters but {book.length} allows max {max_chapters}"
+        elif count < min_chapters:
+            reason = f"has {count} chapters but {book.length} requires min {min_chapters}"
+        else:
+            reason = None
+
+        if reason is not None:
+            if attempt < max_retries:
+                logger.warning(
+                    "Outline for '%s' %s — retrying (attempt %d/%d)",
+                    book.title, reason, attempt, max_retries,
+                )
+                continue
+            else:
+                raise ValueError(
+                    f"Outline for '{book.title}' {reason}. "
+                    f"Retried {max_retries} times — giving up."
+                )
+
+        # Chapter count is valid — proceed
+        break
 
     # Store outline as list (matching BookState schema)
     book.outline = outline_chapters
@@ -191,6 +220,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
         context_parts = [
             f"Book: {book.title}\n",
             f"Genre: {tags_str}\n",
+            f"User's original request:\n{book.prompt}\n\n",
             f"Book Summary:\n{book.summary}\n\n",
             f"Full Outline:\n{book.outline}\n\n",
         ]
@@ -211,10 +241,11 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
             {"role": "user", "content": (
                 "".join(context_parts) +
                 f"Now write: {title}\n\n"
-                f"Continue the story naturally from the previous chapters. "
-                f"Maintain consistent tone, character voices, and narrative pacing. "
+                f"Continue naturally from the previous chapters. "
+                f"Stay faithful to the user's original request above — address what they asked for. "
+                f"Maintain consistent tone and style throughout. "
                 f"Target word count for this chapter: {word_guidance}.\n\n"
-                f"Return ONLY the chapter content as plain text, starting directly with the narrative."
+                f"Return ONLY the chapter content as plain text, starting directly with the content."
             )},
         ]
 
@@ -297,6 +328,7 @@ async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
         context_parts = [
             f"Book: {book.title}\n",
             f"Genre: {tags_str}\n",
+            f"User's original request:\n{book.prompt}\n\n",
             f"Book Summary:\n{book.summary}\n\n",
             f"Full Outline:\n{book.outline}\n\n",
         ]
@@ -317,10 +349,11 @@ async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
             {"role": "user", "content": (
                 "".join(context_parts) +
                 f"Now write: {title}\n\n"
-                f"Continue the story naturally from the previous chapters. "
-                f"Maintain consistent tone, character voices, and narrative pacing. "
+                f"Continue naturally from the previous chapters. "
+                f"Stay faithful to the user's original request above — address what they asked for. "
+                f"Maintain consistent tone and style throughout. "
                 f"Target word count for this chapter: {word_guidance}.\n\n"
-                f"Return ONLY the chapter content as plain text, starting directly with the narrative."
+                f"Return ONLY the chapter content as plain text, starting directly with the content."
             )},
         ]
 

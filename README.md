@@ -12,7 +12,9 @@ Generate complete e-books from a simple prompt. Provide a title, topic, genre ta
 - **Separate reviewer** — Optional different LLM endpoint/model for unbiased review
 - **Configurable max review turns** — Control review depth per-book or globally (default: 2 turns)
 - **Auto-correction** — Identified issues are corrected with full per-turn audit trail
-- **Web grounding** — Optional Wikipedia and web search tool calling lets the LLM fact-check during generation and review
+- **Outline validation** — Validates that the LLM produces the correct number of chapters for the book's length tier, retrying (up to 3 attempts by default, configurable via `generation.outline_max_retries`) if the count is out of range
+- **Web grounding** — Optional Wikipedia and web search tool calling lets the LLM fact-check during generation and review. Web search uses the `ddgs` package (DuckDuckGo HTML search) for reliable, comprehensive results
+- **Improved tool descriptions** — Wikipedia and web search tool definitions include detailed query-construction guidance, helping the LLM produce more effective searches
 - **Configurable AI provider** — Change endpoint URL, API key, model, and reviewer settings from the GUI at runtime
 - **Config persistence** — AI settings saved to disk and restored on restart (API keys excluded for security)
 - **Model discovery** — Fetch available models from your LLM provider

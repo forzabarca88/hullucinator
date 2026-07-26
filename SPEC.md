@@ -1,6 +1,6 @@
 # Hullucinator — Feature Specification
 
-An application that generates complete e-books from a simple user prompt, using one or more LLM providers through OpenAI-compatible APIs.
+An application that generates complete books from a simple user prompt, using one or more LLM providers through OpenAI-compatible APIs. Content can be fiction, non-fiction, reference material, or any other type — the system adapts to what the user asks for.
 
 ---
 
@@ -10,21 +10,21 @@ The core feature: transform a user prompt into a complete, reviewed book through
 
 ### Step 1 — Summary
 
-Given a title, user prompt, genre tags, and desired book length, generate a single-paragraph summary capturing the core premise, main conflict, and overall direction.
+Given a title, user prompt, genre tags, and desired book length, generate a single-paragraph summary that faithfully captures what the user is asking for — the subject matter, scope, and what the content will cover.
 
 ### Step 2 — Outline
 
-From the summary, generate a chapter-by-chapter outline as a list of descriptive chapter titles. The number of chapters is determined by the selected book length tier. The outline must follow a clear narrative arc from beginning to end.
+From the summary and the user's original request, generate a chapter-by-chapter outline as a list of descriptive chapter titles. The number of chapters is determined by the selected book length tier. The outline must cover all aspects the user asked about.
 
 ### Step 3 — Chapter Generation
 
-Generate each chapter sequentially. Each chapter receives cumulative context from all previously generated chapters (via condensed one-paragraph summaries) to maintain continuity, consistent tone, character voices, and narrative pacing.
+Generate each chapter sequentially. Each chapter receives cumulative context from all previously generated chapters (via condensed one-paragraph summaries) and the user's original request to maintain continuity, consistent tone and style, and alignment with what the user asked for.
 
 ### Step 4 — Review (Optional)
 
 After all chapters are generated, run an iterative professional review:
 
-- A critic LLM evaluates the book for plot holes, character inconsistencies, pacing problems, continuity errors, tone inconsistencies, and unresolved threads
+- A reviewer LLM first checks that the content faithfully addresses the user's original request, then evaluates for logical inconsistencies, factual errors, continuity errors, tone inconsistencies, unresolved topics, and pacing problems
 - Returns a score (0–10), a verdict ("ready" or "needs_revision"), and a list of specific issues with suggested fixes
 - For each issue, the writer LLM rewrites the affected chapter to address the problem
 - The cycle repeats until the book passes review (score meets threshold and verdict is "ready") or a configurable maximum number of turns is reached
@@ -184,7 +184,7 @@ Clicking a book card opens a modal with:
 - **Progress** — Progress bar, percentage, chapter count, error message (if failed)
 - **Summary** — Generated book summary (rendered as formatted text)
 - **Outline** — Numbered chapter list
-- **Chapters** — Collapsible sections, each showing full chapter content (rendered as formatted text)
+- **Chapters** — Collapsible chapters, each showing full chapter content (rendered as formatted text)
 - **Review Results** (if reviewed) — Score display (color-coded: green/amber/red), verdict (Approved/Needs Revision), max-turns-reached warning, and expandable turn-by-turn history showing critique text, issues found, and corrections applied
 
 **Action Buttons:**
