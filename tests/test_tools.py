@@ -371,40 +371,38 @@ class TestWikipediaSearch:
 
 
 class TestWebSearch:
-    """Test web_search implementation."""
+    """Test web_search implementation (ddgs package)."""
 
     @pytest.mark.asyncio
-    async def test_success_with_abstract(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "Abstract": "Python is a programming language.",
-            "AbstractURL": "https://python.org",
-        }
+    async def test_success_with_results(self):
+        """Happy path: ddgs returns search results with title, body, href."""
+        mock_search = MagicMock()
+        mock_search.text.return_value = [
+            {"title": "Python Programming", "body": "Python is a programming language.", "href": "https://python.org"},
+            {"title": "Python Docs", "body": "Official documentation.", "href": "https://docs.python.org"},
+        ]
+        # DDGS is used as a context manager: with DDGS() as search:
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_search)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
 
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        with patch("app.tools.get_tool_client", return_value=mock_client):
+        with patch("app.tools.DDGS", return_value=mock_ddgs):
             result = await web_search("Python")
             assert "Python is a programming language" in result
             assert "python.org" in result
+            assert "Python Programming" in result
+            mock_search.text.assert_called_once_with("Python", max_results=10)
 
     @pytest.mark.asyncio
     async def test_no_results(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "Abstract": "",
-            "RelatedTopics": [],
-        }
+        """ddgs returns empty list — graceful no-results message."""
+        mock_search = MagicMock()
+        mock_search.text.return_value = []
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_search)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
 
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        with patch("app.tools.get_tool_client", return_value=mock_client):
+        with patch("app.tools.DDGS", return_value=mock_ddgs):
             result = await web_search("obscure topic")
             assert "No results found" in result
 
@@ -744,28 +742,25 @@ class TestRetryLogic:
 
     @pytest.mark.asyncio
     async def test_web_search_retries_on_transient(self):
-        """web_search retries on timeout, succeeds."""
+        """web_search retries on connection failure, succeeds."""
         call_count = 0
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = {
-            "Abstract": "Found it!",
-            "AbstractURL": "https://example.com",
-        }
 
-        async def flaky_get(*args, **kwargs):
+        def flaky_text(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count < 2:
-                raise httpx.ReadTimeout("timeout")
-            return mock_response
+                raise ConnectionError("network down")
+            return [{"title": "Found it!", "body": "Success.", "href": "https://example.com"}]
 
-        mock_client = MagicMock()
-        mock_client.get = flaky_get
+        mock_search = MagicMock()
+        mock_search.text = flaky_text
+        mock_ddgs = MagicMock()
+        mock_ddgs.__enter__ = MagicMock(return_value=mock_search)
+        mock_ddgs.__exit__ = MagicMock(return_value=False)
 
-        with patch("app.tools.get_tool_client", return_value=mock_client), \
+        with patch("app.tools.DDGS", return_value=mock_ddgs), \
              patch("asyncio.sleep", new_callable=AsyncMock):
             result = await web_search("Test")
             assert "Found it!" in result
+            assert "example.com" in result
             assert call_count == 2  # Failed once, succeeded on 2nd

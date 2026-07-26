@@ -50,6 +50,7 @@ def _build_review_text(book: BookState, chapters: list, turn_num: int) -> str:
     """
     tags_str = ", ".join(book.tags) if book.tags else "none specified"
     review_text = f"Book: {book.title}\nGenre: {tags_str}\n\n"
+    review_text += f"User's original request:\n{book.prompt}\n\n"
     review_text += f"Summary:\n{book.summary}\n\n"
     review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book.outline)) + "\n\n"
 
@@ -106,6 +107,7 @@ def _build_revision_context(book: BookState, chapter_title: str) -> tuple:
     system_prompt = _gen_config.revision_system_prompt
     user_prompt = (
         f"Book: {book.title}\nGenre: {tags_str}\n\n"
+        f"User's original request:\n{book.prompt}\n\n"
         f"Book summary:\n{book.summary}\n\n"
         + prior_context + "\n\n"
     )
