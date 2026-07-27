@@ -49,7 +49,8 @@ def _build_review_text(book: BookState, chapters: list, turn_num: int) -> str:
         Formatted review text string ready for the critique prompt.
     """
     tags_str = ", ".join(book.tags) if book.tags else "none specified"
-    review_text = f"Book: {book.title}\nGenre: {tags_str}\n\n"
+    review_text = f"Book: {book.title}\nTags: {tags_str}\n\n"
+    review_text += f"The tags above are binding constraints on content type, tone, and scope.\n\n"
     review_text += f"User's original request:\n{book.prompt}\n\n"
     review_text += f"Summary:\n{book.summary}\n\n"
     review_text += "Outline:\n" + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(book.outline)) + "\n\n"
@@ -106,7 +107,8 @@ def _build_revision_context(book: BookState, chapter_title: str) -> tuple:
 
     system_prompt = _gen_config.revision_system_prompt
     user_prompt = (
-        f"Book: {book.title}\nGenre: {tags_str}\n\n"
+        f"Book: {book.title}\nTags: {tags_str}\n\n"
+        f"The tags above are binding constraints — the revised content must align with every tag.\n\n"
         f"User's original request:\n{book.prompt}\n\n"
         f"Book summary:\n{book.summary}\n\n"
         + prior_context + "\n\n"
@@ -340,8 +342,6 @@ async def _chunked_review(reviewer: WebGroundingClient, ai_client: AIClient,
     chapters, reviews are done in batches of REVIEW_CHUNK_SIZE chapters.
     Results are aggregated and corrections applied across all chunks.
     """
-    tags_str = ", ".join(book.tags) if book.tags else "none specified"
-
     # Initialize review history
     if book.review_history is None:
         book.review_history = []

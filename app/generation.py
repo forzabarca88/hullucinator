@@ -81,11 +81,13 @@ async def generate_summary(ai_client: AIClient, book: BookState) -> None:
         {"role": "system", "content": _gen_config.summary_system_prompt},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
-            f"Genre/Tags: {tags_str}\n"
+            f"Tags: {tags_str}\n\n"
+            f"The tags above are binding constraints on the content type, tone, and scope. "
+            f"The summary must align with every tag provided.\n\n"
             f"Book length: {book.length} ({LENGTH_WORD_COUNT.get(book.length, 'unknown')} words)\n\n"
             f"User prompt:\n{book.prompt}\n\n"
-            f"Generate a single paragraph summary that captures the subject matter, "
-            f"scope, and what the content will cover based on the user's request above."
+            f"Write a single paragraph summary of the subject matter described in the user's request. "
+            f"Write directly about the topic — do not describe what the book or content will be."
         )},
     ]
 
@@ -128,7 +130,8 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
         )},
         {"role": "user", "content": (
             f"Title: {book.title}\n"
-            f"Genre/Tags: {tags_str}\n"
+            f"Tags: {tags_str}\n\n"
+            f"The tags above are binding constraints — the content must align with every tag.\n\n"
             f"Book length: {book.length}\n"
             f"Number of chapters: {chapter_guidance}\n"
             f"Target word count: {word_guidance}\n\n"
@@ -137,6 +140,7 @@ async def generate_outline(ai_client: AIClient, book: BookState) -> None:
             f"Generate a chapter-by-chapter outline as a numbered list. "
             f"The outline must faithfully address the user's original request above — "
             f"cover all the topics, details, and scope they asked for. "
+            f"The content type must match the tags provided. "
             f"Return ONLY the list, one chapter per line, in this format:\n"
             f"1. Chapter Title One\n"
             f"2. Chapter Title Two\n\n"
@@ -219,7 +223,8 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
         # Build cumulative context
         context_parts = [
             f"Book: {book.title}\n",
-            f"Genre: {tags_str}\n",
+            f"Tags: {tags_str}\n\n",
+            f"The tags above are binding constraints — the content must align with every tag.\n\n"
             f"User's original request:\n{book.prompt}\n\n",
             f"Book Summary:\n{book.summary}\n\n",
             f"Full Outline:\n{book.outline}\n\n",
@@ -244,6 +249,7 @@ async def generate_chapters(ai_client: AIClient, book: BookState) -> None:
                 f"Continue naturally from the previous chapters. "
                 f"Stay faithful to the user's original request above — address what they asked for. "
                 f"Maintain consistent tone and style throughout. "
+                f"The content must align with the tags provided above.\n\n"
                 f"Target word count for this chapter: {word_guidance}.\n\n"
                 f"Return ONLY the chapter content as plain text, starting directly with the content."
             )},
@@ -327,7 +333,8 @@ async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
         # Build cumulative context from all existing chapters
         context_parts = [
             f"Book: {book.title}\n",
-            f"Genre: {tags_str}\n",
+            f"Tags: {tags_str}\n\n",
+            f"The tags above are binding constraints — the content must align with every tag.\n\n"
             f"User's original request:\n{book.prompt}\n\n",
             f"Book Summary:\n{book.summary}\n\n",
             f"Full Outline:\n{book.outline}\n\n",
@@ -352,6 +359,7 @@ async def resume_chapters(ai_client: AIClient, book: BookState) -> None:
                 f"Continue naturally from the previous chapters. "
                 f"Stay faithful to the user's original request above — address what they asked for. "
                 f"Maintain consistent tone and style throughout. "
+                f"The content must align with the tags provided above.\n\n"
                 f"Target word count for this chapter: {word_guidance}.\n\n"
                 f"Return ONLY the chapter content as plain text, starting directly with the content."
             )},
