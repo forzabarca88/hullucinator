@@ -62,9 +62,13 @@ class GenerationConfig(BaseModel):
     summary_system_prompt: str = Field(
         default=(
             "You are a content generation assistant. Generate a concise one-paragraph summary "
-            "that faithfully captures what the user is asking for. Stay close to the user's request — "
-            "do not invent a narrative arc, fictional premise, or creative interpretation unless "
-            "the user explicitly asks for fiction. For factual, informational, or reference content, "
+            "of the subject matter the user is asking about. "
+            "Write the summary directly about the topic — do not use meta-language like "
+            "'this content will be', 'this book covers', or 'the following is'. "
+            "The user has assigned tags to this request — treat them as binding constraints on the content type, "
+            "tone, and scope. The summary must align with every tag provided. "
+            "Do not invent a narrative arc, fictional premise, or creative interpretation unless "
+            "the user's tags clearly indicate fiction. For factual, informational, or reference content, "
             "the summary should describe the subject matter and scope accurately."
         ),
         description="System prompt template for summary generation. No format placeholders."
@@ -72,20 +76,21 @@ class GenerationConfig(BaseModel):
     outline_system_prompt: str = Field(
         default=(
             "You are a content generation assistant. Generate a chapter outline for a {length} "
-            "({word_count} words) in the {tags} genre. "
+            "({word_count} words) with the following tags: {tags}. "
+            "The tags are binding constraints — the content must align with every tag. "
             "The book must have {chapter_guidance}. "
-            "The outline must faithfully address the user's original request — do not invent a "
-            "fictional narrative unless the user explicitly asks for one. Structure the chapters "
-            "to cover all aspects the user asked about."
+            "The outline must faithfully address the user's original request. "
+            "Structure the chapters to cover all aspects the user asked about, "
+            "ensuring the content type matches the tags provided."
         ),
         description="System prompt template for outline generation. Use {length}, {word_count}, {tags}, {chapter_guidance} as placeholders."
     )
     chapter_system_prompt: str = Field(
         default=(
             "You are a content generation assistant. Write chapter {chapter_num} of a {length} "
-            "in the {tags} genre. Target {word_count} words for the full book. "
-            "Faithfully address the user's original request — do not invent a fictional narrative "
-            "unless the user explicitly asks for one. Stay aligned with what the user asked for. "
+            "with the following tags: {tags}. Target {word_count} words for the full book. "
+            "The tags are binding constraints — the content must align with every tag. "
+            "Faithfully address the user's original request. Stay aligned with what the user asked for. "
             "Return ONLY plain text content — do NOT wrap output in JSON or code blocks."
         ),
         description="System prompt template for chapter generation. Use {chapter_num}, {length}, {tags}, {word_count} as placeholders."
@@ -101,17 +106,22 @@ class GenerationConfig(BaseModel):
     critique_system_prompt: str = Field(
         default=(
             "You are a professional content reviewer and editor. Review the following content critically. "
-            "First, check that the content faithfully addresses the user's original request — identify any "
+            "First, verify the content aligns with the book's tags — the tags are binding constraints on "
+            "content type, tone, and scope. Flag any drift from what the tags require. "
+            "Then check that the content faithfully addresses the user's original request — identify any "
             "drift from what was asked for. Then identify any other major issues including:\n"
             "- Logical inconsistencies or factual errors\n"
             "- Continuity errors (chapters that contradict each other)\n"
             "- Tone or style inconsistencies across chapters\n"
             "- Unresolved topics or incomplete coverage of requested subjects\n"
             "- Pacing problems (rushed chapters, dragging chapters)\n\n"
+            "If a current date/time is provided above, treat it as authoritative — it reflects the actual present moment. "
+            "Do not second-guess, dispute, or flag content as fabricated or future simply because it post-dates your training data cutoff. "
+            "Evaluate all facts and events relative to the provided date.\n\n"
             "Return your review as a JSON object with this exact structure:\n"
             '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
             "Be constructive but honest. Only flag issues that would genuinely affect reader experience. "
-            "If the content is solid and addresses the user's request (score >= {pass_score}), "
+            "If the content is solid, addresses the user's request, and aligns with the tags (score >= {pass_score}), "
             "set verdict to 'ready' with an empty issues array."
         ),
         description="System prompt template for critique. Use {pass_score} as placeholder."
@@ -119,9 +129,14 @@ class GenerationConfig(BaseModel):
     critique_chunk_system_prompt: str = Field(
         default=(
             "You are a professional content reviewer and editor. Review the following chapters critically. "
-            "Check that the content faithfully addresses the user's original request — identify any "
+            "First, verify the content aligns with the book's tags — the tags are binding constraints on "
+            "content type, tone, and scope. Flag any drift from what the tags require. "
+            "Then check that the content faithfully addresses the user's original request — identify any "
             "drift from what was asked for. Identify any major issues including logical inconsistencies, "
             "continuity errors, tone inconsistencies, unresolved topics, and pacing problems.\n\n"
+            "If a current date/time is provided above, treat it as authoritative — it reflects the actual present moment. "
+            "Do not second-guess, dispute, or flag content as fabricated or future simply because it post-dates your training data cutoff. "
+            "Evaluate all facts and events relative to the provided date.\n\n"
             "Return your review as a JSON object with this exact structure:\n"
             '{"issues": [{"chapter": "chapter_title", "type": "issue_type", "description": "what is wrong", "suggestion": "how to fix"}], "overall_score": 0-10, "verdict": "needs_revision" | "ready"}\n\n'
             "Only flag issues in the chapters provided above. Score based on these chapters but consider overall content quality."
@@ -132,7 +147,8 @@ class GenerationConfig(BaseModel):
         default=(
             "You are a skilled content writer revising a chapter. Rewrite the chapter to address "
             "the specific issues identified while preserving the core content and style. "
-            "Ensure consistency with the rest of the book and alignment with the user's original request."
+            "Ensure consistency with the rest of the book, alignment with the user's original request, "
+            "and strict adherence to the book's tags — the tags are binding constraints on content type and tone."
         ),
         description="System prompt template for chapter revision."
     )

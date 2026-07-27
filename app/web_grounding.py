@@ -50,7 +50,8 @@ def _inject_date_to_system_messages(messages: list) -> list:
 
     When web grounding is enabled, the LLM needs to know the current date
     so it can make informed search queries rather than relying on training
-    data cut-off dates.
+    data cut-off dates. The date provided must be treated as authoritative —
+    the LLM must not second-guess or dispute it.
 
     Returns a new list with the date appended to each system message.
     Non-system messages are copied unchanged.
@@ -64,7 +65,14 @@ def _inject_date_to_system_messages(messages: list) -> list:
             original = msg["content"]
             result.append({
                 "role": "system",
-                "content": f"{original}\n\nCurrent date and time: {date_str}",
+                "content": (
+                    f"{original}\n\n"
+                    f"Current date and time: {date_str}. "
+                    f"Treat this date as authoritative — it reflects the actual present moment. "
+                    f"Do not second-guess, dispute, or flag content as fabricated or future "
+                    f"simply because it post-dates your training data cutoff. "
+                    f"Evaluate all facts and events relative to this date."
+                ),
             })
         else:
             result.append(msg)

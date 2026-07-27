@@ -2,7 +2,7 @@
 
 > ⚠️ This was a personal project primarily implemented with generative AI. Please review code accordingly before re-use.
 
-Generate complete e-books from a simple prompt. Provide a title, topic, genre tags, and desired length — the system orchestrates an LLM to produce a polished book with professional review, then exports to EPUB or PDF.
+Generate complete e-books from a simple prompt. Provide a title, topic, tags, and desired length — the system orchestrates an LLM to produce a polished book with professional review, then exports to EPUB or PDF.
 
 ## Features
 
@@ -81,7 +81,7 @@ Open http://localhost:8000 in your browser. On first launch, the setup wizard gu
 
 1. Enter a **title** for your book
 2. Write a **prompt** describing what you want the book to be about
-3. Add optional **genre tags** (comma-separated, e.g. "comedy, time travel") to guide tone and style
+3. Add optional **tags** (comma-separated, e.g. "comedy, time travel") to constrain content type, tone, and style
 4. Choose a **book length**:
    | Length | Chapters | Target Word Count |
    |--------|----------|-------------------|
@@ -95,7 +95,7 @@ Open http://localhost:8000 in your browser. On first launch, the setup wizard gu
 
 ### Browse Your Library
 
-- See all generated books with status indicators, genre tags, and length badges
+- See all generated books with status indicators, tags, and length badges
 - Click any book to view its summary, outline, chapter content, and review audit trail
 - Progress updates automatically without refreshing the page
 

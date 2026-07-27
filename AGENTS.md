@@ -49,6 +49,8 @@ Config sub-models:
 
 **Review checks for prompt alignment.** The critique system prompts instruct the reviewer to first verify the content faithfully addresses the user's original request before checking for other issues (continuity, tone, pacing). Misalignment with the user's request is treated as an issue type.
 
+**Tags are binding constraints.** System prompts and user messages across all pipeline steps (summary, outline, chapters, review, revision) treat tags as binding constraints on content type, tone, and scope. Tags are presented prominently in user messages with explicit language that the content must align with every tag. The reviewer checks tag alignment as the first review criterion before checking other issues.
+
 **Temperature settings.** Summary generation uses temperature 1.0 (creative synthesis of the user's prompt). Outline uses 0.7 and chapter generation uses 0.8 (balanced between creativity and fidelity). Chapter summaries use 0.3 (concise, faithful). Critique uses 0.5 and revision uses 0.7.
 
 ## Outline Validation
