@@ -149,12 +149,11 @@ WIKIPEDIA_SEARCH: Dict[str, Any] = {
         "name": "wikipedia_search",
         "description": (
             "Search Wikipedia for a topic and return a concise summary. "
-            "Use this to verify facts, get background information, or "
-            "research real-world references for the book. "
             "Query tips: use specific topic names or proper nouns (e.g., ""quantum mechanics"", ""Marie Curie""). "
             "Avoid overly broad terms like ""science"" — narrow to the specific subject. "
             "For people, use full names. For events, include the year or date. "
-            "For technical topics, use the standard terminology."
+            "For technical topics, use the standard terminology. "
+            "Make multiple searches to cover all aspects of the topic."
         ),
         "parameters": {
             "type": "object",
@@ -175,8 +174,7 @@ WEB_SEARCH: Dict[str, Any] = {
         "name": "web_search",
         "description": (
             "Perform a general web search to find current information, "
-            "facts, or references. Use this when Wikipedia doesn't have "
-            "the needed information or for more recent topics. "
+            "facts, or references. "
             "Query tips: use specific, focused keywords. Include proper nouns, dates, and names. "
             "Avoid vague or overly broad terms. Use quotes for exact phrases when needed. "
             "Break complex topics into multiple focused searches rather than one broad query."

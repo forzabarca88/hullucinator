@@ -4,29 +4,51 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.web_grounding import (
-    _inject_date_to_system_messages,
+    _get_current_date_str,
+    _inject_grounding_instruction,
     _generate_with_optional_tools,
     WebGroundingClient,
 )
 
 
-class TestInjectDateToSystemMessages:
-    """Test _inject_date_to_system_messages appends date to system messages."""
+class TestGetCurrentDateStr:
+    """Test _get_current_date_str returns formatted UTC date."""
 
-    def test_injects_date_into_single_system_message(self):
+    def test_date_format(self):
+        """Date is formatted as YYYY-MM-DD HH:MM UTC."""
+        date_str = _get_current_date_str()
+
+        import re
+        pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC"
+        assert re.search(pattern, date_str) is not None
+
+    def test_returns_string(self):
+        """Returns a string."""
+        date_str = _get_current_date_str()
+        assert isinstance(date_str, str)
+
+
+class TestInjectGroundingInstruction:
+    """Test _inject_grounding_instruction prepends a grounding instruction."""
+
+    def test_prepends_grounding_instruction_with_date(self):
         messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "You are a writer."},
+            {"role": "user", "content": "Write a story."},
         ]
-        result = _inject_date_to_system_messages(messages)
+        result = _inject_grounding_instruction(messages, date_str="2025-01-15 14:30 UTC")
 
-        assert len(result) == 2
+        assert len(result) == 3
         assert result[0]["role"] == "system"
-        assert "You are a helpful assistant." in result[0]["content"]
-        assert "Current date and time:" in result[0]["content"]
-        assert "UTC" in result[0]["content"]
-        # User message unchanged
-        assert result[1] == {"role": "user", "content": "Hello"}
+        assert "Research tools are available" in result[0]["content"]
+        assert "BEFORE writing" in result[0]["content"]
+        assert "wikipedia_search" in result[0]["content"]
+        assert "web_search" in result[0]["content"]
+        assert "Current date and time: 2025-01-15 14:30 UTC" in result[0]["content"]
+        assert "Treat this date as authoritative" in result[0]["content"]
+        # Original messages preserved in order after the instruction
+        assert result[1] == {"role": "system", "content": "You are a writer."}
+        assert result[2] == {"role": "user", "content": "Write a story."}
 
     def test_preserves_original_messages(self):
         """Original messages list is not mutated."""
@@ -34,69 +56,48 @@ class TestInjectDateToSystemMessages:
             {"role": "system", "content": "Original prompt"},
             {"role": "user", "content": "User input"},
         ]
-        _inject_date_to_system_messages(original)
+        _inject_grounding_instruction(original, date_str="2025-01-15 14:30 UTC")
 
-        # Original should be unchanged
         assert original[0]["content"] == "Original prompt"
-        assert "Current date and time:" not in original[0]["content"]
+        assert "Research tools" not in original[0]["content"]
 
-    def test_no_system_message(self):
-        """Messages without system role are copied unchanged."""
+    def test_empty_messages_list(self):
+        """Empty list returns just the grounding instruction."""
+        result = _inject_grounding_instruction([], date_str="2025-01-15 14:30 UTC")
+        assert len(result) == 1
+        assert result[0]["role"] == "system"
+        assert "Research tools are available" in result[0]["content"]
+
+    def test_no_system_message_in_input(self):
+        """Works with messages that have no system role."""
         messages = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
         ]
-        result = _inject_date_to_system_messages(messages)
-
-        assert result == messages
-        assert "Current date and time:" not in str(result)
-
-    def test_multiple_system_messages(self):
-        """Each system message gets the date appended."""
-        messages = [
-            {"role": "system", "content": "First system prompt"},
-            {"role": "user", "content": "Input"},
-            {"role": "system", "content": "Second system prompt"},
-        ]
-        result = _inject_date_to_system_messages(messages)
+        result = _inject_grounding_instruction(messages, date_str="2025-01-15 14:30 UTC")
 
         assert len(result) == 3
-        assert "Current date and time:" in result[0]["content"]
-        assert "First system prompt" in result[0]["content"]
-        assert result[1] == {"role": "user", "content": "Input"}
-        assert "Current date and time:" in result[2]["content"]
-        assert "Second system prompt" in result[2]["content"]
+        assert result[0]["role"] == "system"
+        assert "Research tools are available" in result[0]["content"]
+        assert result[1] == {"role": "user", "content": "Hello"}
+        assert result[2] == {"role": "assistant", "content": "Hi there"}
 
-    def test_date_format(self):
-        """Date is formatted as YYYY-MM-DD HH:MM UTC."""
+    def test_without_date_str(self):
+        """Grounding instruction without date still works (no date line)."""
         messages = [
-            {"role": "system", "content": "Test"},
+            {"role": "user", "content": "Hello"},
         ]
-        result = _inject_date_to_system_messages(messages)
+        result = _inject_grounding_instruction(messages, date_str=None)
 
-        import re
-        # Check for expected format: 2024-01-15 14:30 UTC
-        pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC"
-        assert re.search(pattern, result[0]["content"]) is not None
-
-    def test_empty_messages_list(self):
-        """Empty list returns empty list."""
-        result = _inject_date_to_system_messages([])
-        assert result == []
-
-    def test_system_message_with_multiline_content(self):
-        """Multiline system prompt preserves newlines."""
-        messages = [
-            {"role": "system", "content": "Line one\nLine two\nLine three"},
-        ]
-        result = _inject_date_to_system_messages(messages)
-
-        assert "Line one\nLine two\nLine three" in result[0]["content"]
-        assert "\n\nCurrent date and time:" in result[0]["content"]
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert "Research tools are available" in result[0]["content"]
+        assert "Current date and time:" not in result[0]["content"]
+        assert "Treat this date as authoritative" not in result[0]["content"]
 
 
 class TestGenerateWithOptionalTools:
-    """Test _generate_with_optional_tools date injection behavior."""
+    """Test _generate_with_optional_tools grounding injection behavior."""
 
     def _make_mock_client(self):
         """Create a mock client satisfying WebGroundingClient protocol."""
@@ -108,7 +109,7 @@ class TestGenerateWithOptionalTools:
         return client
 
     @pytest.mark.asyncio
-    async def test_no_date_injection_when_web_grounding_disabled(self):
+    async def test_no_injection_when_web_grounding_disabled(self):
         """When web grounding is disabled, messages pass through unchanged."""
         client = self._make_mock_client()
         messages = [
@@ -124,13 +125,13 @@ class TestGenerateWithOptionalTools:
             call_args = client.generate_completion.call_args
             passed_messages = call_args[0][0]
 
-            # Messages should NOT have date injected
+            # Messages should NOT have grounding injected
             assert passed_messages[0]["content"] == "You are a writer."
-            assert "Current date and time:" not in passed_messages[0]["content"]
+            assert "Research tools are available" not in passed_messages[0]["content"]
 
     @pytest.mark.asyncio
-    async def test_date_injected_when_web_grounding_enabled(self):
-        """When web grounding is enabled, date is injected into system messages."""
+    async def test_grounding_injected_when_web_grounding_enabled(self):
+        """When web grounding is enabled, grounding instruction is prepended with date."""
         client = self._make_mock_client()
         messages = [
             {"role": "system", "content": "You are a writer."},
@@ -146,13 +147,18 @@ class TestGenerateWithOptionalTools:
             call_args = client.generate_completion_with_tools.call_args
             passed_messages = call_args[1]["messages"]
 
-            # System message should have date injected
+            # First message is the prepended grounding instruction (includes date)
+            assert passed_messages[0]["role"] == "system"
+            assert "Research tools are available" in passed_messages[0]["content"]
             assert "Current date and time:" in passed_messages[0]["content"]
-            assert "You are a writer." in passed_messages[0]["content"]
+            assert "Treat this date as authoritative" in passed_messages[0]["content"]
+            # Original messages preserved after the instruction (no date appended)
+            assert passed_messages[1] == {"role": "system", "content": "You are a writer."}
+            assert passed_messages[2] == {"role": "user", "content": "Write a story."}
 
     @pytest.mark.asyncio
-    async def test_date_injected_on_fallback_when_no_tools(self):
-        """When web grounding is enabled but no tools available, date still injected."""
+    async def test_grounding_injected_on_fallback_when_no_tools(self):
+        """When web grounding is enabled but no tools available, grounding still injected."""
         client = self._make_mock_client()
         messages = [
             {"role": "system", "content": "You are a writer."},
@@ -168,12 +174,15 @@ class TestGenerateWithOptionalTools:
             call_args = client.generate_completion.call_args
             passed_messages = call_args[0][0]
 
-            # Date should still be injected
+            # First message is grounding instruction (includes date)
+            assert "Research tools are available" in passed_messages[0]["content"]
             assert "Current date and time:" in passed_messages[0]["content"]
+            # Original messages preserved without date appended
+            assert passed_messages[1] == {"role": "system", "content": "You are a writer."}
 
     @pytest.mark.asyncio
-    async def test_date_injected_on_runtime_error_fallback(self):
-        """When tool calling raises RuntimeError, date stays injected in fallback."""
+    async def test_grounding_injected_on_runtime_error_fallback(self):
+        """When tool calling raises RuntimeError, grounding stays injected in fallback."""
         client = self._make_mock_client()
         # First call to generate_completion_with_tools raises RuntimeError
         client.generate_completion_with_tools = AsyncMock(side_effect=[RuntimeError("no tools"), AsyncMock()])
@@ -194,8 +203,11 @@ class TestGenerateWithOptionalTools:
             call_args = client.generate_completion.call_args
             passed_messages = call_args[0][0]
 
-            # Date should still be injected in fallback
+            # Grounding instruction (with date) present in fallback
+            assert "Research tools are available" in passed_messages[0]["content"]
             assert "Current date and time:" in passed_messages[0]["content"]
+            # Original messages preserved without date appended
+            assert passed_messages[1] == {"role": "system", "content": "You are a writer."}
 
     @pytest.mark.asyncio
     async def test_original_messages_not_mutated(self):
@@ -214,3 +226,4 @@ class TestGenerateWithOptionalTools:
         # Original should be unchanged
         assert original_messages[0]["content"] == original_content
         assert "Current date and time:" not in original_messages[0]["content"]
+        assert "Research tools are available" not in original_messages[0]["content"]
