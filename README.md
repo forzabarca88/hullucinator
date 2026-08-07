@@ -4,30 +4,15 @@
 
 Generate complete e-books from a simple prompt. Provide a title, topic, tags, and desired length — the system orchestrates an LLM to produce a polished book with professional review, then exports to EPUB or PDF.
 
-## Features
+## Requirements
 
-- **Smart book generation** — LLM produces summary, chapter outline, and full chapters
-- **Chapter continuity** — Each chapter receives context from all prior chapters for cohesive writing
-- **Professional review** — Iterative critique → correct → re-critique loop catches plot holes, inconsistencies, and pacing issues
-- **Separate reviewer** — Optional different LLM endpoint/model for unbiased review
-- **Configurable max review turns** — Control review depth per-book or globally (default: 2 turns)
-- **Auto-correction** — Identified issues are corrected with full per-turn audit trail
-- **Outline validation** — Validates that the LLM produces the correct number of chapters for the book's length tier, retrying (up to 3 attempts by default, configurable via `generation.outline_max_retries`) if the count is out of range
-- **Web grounding** — Optional Wikipedia and web search tool calling lets the LLM fact-check during generation and review. Web search uses the `ddgs` package (DuckDuckGo HTML search) for reliable, comprehensive results
-- **Improved tool descriptions** — Wikipedia and web search tool definitions include detailed query-construction guidance, helping the LLM produce more effective searches
-- **Configurable AI provider** — Change endpoint URL, API key, model, and reviewer settings from the GUI at runtime
-- **Config persistence** — AI settings saved to disk and restored on restart (API keys excluded for security)
-- **Model discovery** — Fetch available models from your LLM provider
-- **Rich exports** — EPUB with CSS styling, TOC, drop caps, and review metadata; PDF with configurable fonts
-- **Live progress tracking** — Real-time progress bar with chapter-by-chapter updates
-- **Auto-resume on restart** — Books interrupted by server shutdown automatically resume from where they left off
-- **Manual resume** — Resume interrupted books from the UI, preserving all already-generated content
+- Python 3.9+
+- `uv` (for package management)
+- Access to an LLM API (any OpenAI-compatible endpoint)
 
 ## Quick Start
 
-### Install
-
-Hullucinator uses `uv` for package management. Create a virtual environment and install dependencies:
+### 1. Install
 
 ```bash
 uv venv
@@ -35,45 +20,21 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
-### Configure
-
-Create a `.env` file from the provided template:
+### 2. Run
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` to point at your LLM provider:
-
-```ini
-# AI Provider (Writer)
-AI_ENDPOINT_URL=http://your-llm-server:8080
-AI_MODEL_NAME=your-model-name
-AI_API_KEY=your-api-key
-
-# Reviewer (optional — leave empty to use writer's endpoint/model)
-REVIEWER_ENDPOINT_URL=
-REVIEWER_MODEL_NAME=
-REVIEWER_API_KEY=
-
-# Server
-HULLUCINATOR_HOST=0.0.0.0
-HULLUCINATOR_PORT=8000
-```
-
-You can also configure everything from the web interface using the ⚙️ Settings panel — no `.env` file needed.
-
-### Run
-
-```bash
-# Start the server
 uvicorn app.main:app --host 0.0.0.0 --port 8000
-
 # Or use the CLI entry point
 hullucinator
 ```
 
-Open http://localhost:8000 in your browser. On first launch, the setup wizard guides you through configuring your AI provider.
+### 3. Configure
+
+Open http://localhost:8000 in your browser. On first launch, a setup wizard walks you through configuring your AI provider (endpoint URL, model, API key, review settings). No files to edit.
+
+You can change settings anytime using the ⚙️ Settings panel in the web interface. Settings are saved to disk automatically and restored on restart. API keys are never persisted for security.
+
+> **Optional:** If you prefer to pre-populate defaults before first launch, create a `.env` file from the template (`cp .env.example .env`) and edit it. The setup wizard will use these values as starting points.
 
 ## Using the Web Interface
 
@@ -91,7 +52,7 @@ Open http://localhost:8000 in your browser. On first launch, the setup wizard gu
    | Epic / Saga | 15–25 | 50,000+ |
 5. Click **"Generate Book"** — generation runs in the background with a live progress bar
 
-> **Note:** Before queuing a book, the system validates your API credentials with a live test request to the LLM provider. If the endpoint is unreachable, the API key is missing, or the key is invalid (e.g., 401 Unauthorized), book creation is rejected immediately — preventing wasted background tasks that would fail later.
+> **Note:** Before queuing a book, the system validates your API credentials with a live test request to the LLM provider. If the endpoint is unreachable, the API key is missing, or the key is invalid (e.g. 401 Unauthorized), book creation is rejected immediately — preventing wasted background tasks that would fail later.
 
 ### Browse Your Library
 
@@ -121,6 +82,25 @@ Once a book is complete (or reviewed), download it in your preferred format:
 - **Retry** — Restart generation for failed books from scratch; the old failed entry is automatically removed.
 - **Resume** — Continue generation from where it left off, preserving all already-generated content (chapters, summaries, outline). Works for books interrupted by server shutdown or any other failure. Auto-resume triggers on server restart; manual resume is available from the book detail view.
 
+## Features
+
+- **Smart book generation** — LLM produces summary, chapter outline, and full chapters
+- **Chapter continuity** — Each chapter receives context from all prior chapters for cohesive writing
+- **Professional review** — Iterative critique → correct → re-critique loop catches plot holes, inconsistencies, and pacing issues
+- **Separate reviewer** — Optional different LLM endpoint/model for unbiased review
+- **Configurable max review turns** — Control review depth per-book or globally (default: 2 turns)
+- **Auto-correction** — Identified issues are corrected with full per-turn audit trail
+- **Outline validation** — Validates that the LLM produces the correct number of chapters for the book's length tier, retrying (up to 3 attempts by default, configurable via `generation.outline_max_retries`) if the count is out of range
+- **Web grounding** — Optional Wikipedia and web search tool calling lets the LLM fact-check during generation and review. Web search uses the `ddgs` package (DuckDuckGo HTML search) for reliable, comprehensive results
+- **Improved tool descriptions** — Wikipedia and web search tool definitions include detailed query-construction guidance, helping the LLM produce more effective searches
+- **Configurable AI provider** — Change endpoint URL, API key, model, and reviewer settings from the GUI at runtime
+- **Config persistence** — AI settings saved to disk and restored on restart (API keys excluded for security)
+- **Model discovery** — Fetch available models from your LLM provider
+- **Rich exports** — EPUB with CSS styling, TOC, drop caps, and review metadata; PDF with configurable fonts
+- **Live progress tracking** — Real-time progress bar with chapter-by-chapter updates
+- **Auto-resume on restart** — Books interrupted by server shutdown automatically resume from where they left off
+- **Manual resume** — Resume interrupted books from the UI, preserving all already-generated content
+
 ## Settings
 
 Click the ⚙️ button in the top-right corner to configure:
@@ -132,7 +112,9 @@ Click the ⚙️ button in the top-right corner to configure:
 
 Settings are saved to disk automatically and restored on restart. API keys are never persisted for security.
 
-## Environment Variables
+## Optional: Environment Variables
+
+You can pre-populate configuration defaults using a `.env` file or environment variables. These values are used as starting points for the setup wizard and Settings panel.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -146,18 +128,13 @@ Settings are saved to disk automatically and restored on restart. API keys are n
 | `HULLUCINATOR_PORT` | `8000` | Server port |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
-## Requirements
-
-- Python 3.9+
-- `uv` (for package management)
-- Access to an LLM API (any OpenAI-compatible endpoint)
-
 ## Data Storage
 
 Generated books and configuration are stored in `~/.hullucinator_data/`:
 
 - `data/books/` — Generated books as JSON files
 - `data/config.json` — Persisted AI config (no API keys)
+- `data/covers/` — Cover images
 - `exports/` — Exported EPUB and PDF files
 
 ## License
