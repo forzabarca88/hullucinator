@@ -135,6 +135,52 @@ class TestExportEpub:
 
         app_storage.reset_to_defaults()
 
+    def test_epub_cover_image_in_cover_page_html(self, tmp_path):
+        """Cover image appears as an <img> tag in the EPUB cover page HTML."""
+        app_storage.set_test_dirs(tmp_path)
+        app_storage.ensure_covers_dir()
+
+        book_id = "test-epub-cover-html"
+        # Create a minimal valid PNG (1x1 pixel, grey)
+        png_header = bytes([
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ])
+        cover_path = tmp_path / "covers" / f"{book_id}.png"
+        cover_path.write_bytes(png_header)
+
+        chapters = {"Chapter 1": "Content here"}
+        result_path = export_to_epub(
+            book_id, "Cover Book", chapters, tags=[],
+            output_dir=str(tmp_path), cover_image=f"covers/{book_id}.png",
+        )
+
+        assert Path(result_path).exists()
+
+        # Verify the cover image item and its presence in the cover page HTML
+        with zipfile.ZipFile(result_path) as zf:
+            names = zf.namelist()
+
+            # Cover image file exists in the images directory (under EPUB/)
+            assert "EPUB/images/cover.png" in names
+
+            # When a cover image is present, the text page is named title-page.xhtml
+            assert "EPUB/title-page.xhtml" in names
+
+            # The title-page.xhtml must contain an <img> tag referencing the cover
+            title_page_html = zf.read("EPUB/title-page.xhtml").decode('utf-8')
+            assert '<img src="images/cover.png"' in title_page_html
+            assert 'alt="Cover"' in title_page_html
+
+        app_storage.reset_to_defaults()
+
     def test_epub_export_cover_missing_file_fallback(self, tmp_path):
         """EPUB exports gracefully when cover_image path doesn't exist."""
         app_storage.set_test_dirs(tmp_path)

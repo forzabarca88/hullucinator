@@ -297,6 +297,7 @@ def export_to_epub(
 
     # ── Cover image ──
     has_cover_image = False
+    cover_ext = ''
     if cover_image:
         # Import dynamically so test fixtures that override storage paths work correctly
         from app import storage as _storage
@@ -312,19 +313,36 @@ def export_to_epub(
                 ".gif": "image/gif",
             }
             mime_type = _MIME_MAP.get(cover_path.suffix.lower(), "image/png")
-            book.set_cover(mime_type, image_data)
+            # Add as an EPUB item with a stable filename (images/cover{ext})
+            # so the cover page HTML can reference it. Avoid calling book.set_cover()
+            # because ebooklib creates its own cover.xhtml that conflicts with
+            # our manual title-page.xhtml.
+            cover_ext = cover_path.suffix.lower()
+            cover_item = epub.EpubItem(
+                uid='cover_image',
+                file_name=f'images/cover{cover_ext}',
+                media_type=mime_type,
+                content=image_data,
+            )
+            book.add_item(cover_item)
             has_cover_image = True
         else:
             logger.warning("Cover image not found at %s, skipping", cover_path)
 
     # ── Cover page (text fallback, always included) ──
-    # When a cover image is set, ebooklib creates its own cover.xhtml internally.
-    # Rename the text page to 'title-page' to avoid duplicate file name collision.
+    # When a cover image is present, use 'title-page.xhtml' to avoid
+    # collision with ebooklib's auto-generated cover.xhtml.
     if has_cover_image:
         cover_page = epub.EpubHtml(title='Title Page', file_name='title-page.xhtml', lang='en')
     else:
         cover_page = epub.EpubHtml(title='Cover', file_name='cover.xhtml', lang='en')
     cover_html = '<div class="cover-page">'
+
+    # Display the cover image on the title page when available
+    if has_cover_image:
+        cover_html += f'<img src="images/cover{cover_ext}" alt="Cover" style="max-width:100%;display:block;margin:0 auto;">'
+        cover_html += '<br>'
+
     cover_html += f'<h1>{html_lib.escape(title)}</h1>'
     if tags:
         cover_html += f'<p style="margin-top:1rem;font-size:0.9em;opacity:0.7;">{html_lib.escape(", ".join(tags))}</p>'
@@ -355,7 +373,10 @@ def export_to_epub(
     book.toc = [cover_page] + chapters_list
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = ['nav', 'cover'] + chapters_list
+    # Use 'cover' for spine when no cover image (ebooklib's default cover.xhtml),
+    # otherwise reference the title-page.xhtml by its file_name
+    cover_spine_id = cover_page.file_name
+    book.spine = ['nav', cover_spine_id] + chapters_list
 
     # ── Write ──
     out_dir = Path(output_dir)
